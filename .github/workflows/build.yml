@@ -1,0 +1,156 @@
+name: Build Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # ------------------------------------------------------------------
+  # Job 1: Build RPMs (Matrix Build for EL8 & EL9)
+  # ------------------------------------------------------------------
+  build-rpm:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: el8
+            image: rockylinux:8
+          - target: el9
+            image: rockylinux:9
+    
+    # Use container defined in Matrix
+    container: ${{ matrix.image }}
+    
+    steps:
+      # Install common build tools required for RHEL8/9
+      # git is required for checkout
+      - name: Install Build Dependencies
+        run: |
+          dnf install -y --allowerasing git tar rpm-build rpmdevtools coreutils systemd-rpm-macros
+
+      # Node.js 20 (actions/checkout@v4) works on RHEL8 (glibc 2.28) or later
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Extract version information (assumes git command exists in container)
+      - name: Set up Version
+        id: version
+        run: |
+          # Could try getting from env vars instead of git command for safety, but
+          # using simple string processing here
+          REF_VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=${REF_VERSION}" >> $GITHUB_ENV
+          echo "Building RPM for ${{ matrix.target }} - Version: ${REF_VERSION}"
+
+      - name: Build RPM
+        run: |
+          NAME="ip-anycast-service"
+          
+          # Setup rpmbuild directory
+          rpmdev-setuptree
+          
+          # Prepare source code
+          mkdir -p build_tmp/${NAME}-${{ env.VERSION }}
+          cp -r ip-anycast-service/* build_tmp/${NAME}-${{ env.VERSION }}/
+          
+          # Move lib/systemd to usr/lib/systemd (Spec file expects usr/lib/systemd)
+          mkdir -p build_tmp/${NAME}-${{ env.VERSION }}/usr/lib
+          mv build_tmp/${NAME}-${{ env.VERSION }}/lib/systemd build_tmp/${NAME}-${{ env.VERSION }}/usr/lib/
+          rm -rf build_tmp/${NAME}-${{ env.VERSION }}/lib
+          
+          # Create source tarball
+          # Resolve path safely as it depends on environment (user home /github/home or /root)
+          RPMBUILD_TOP=$(rpm --eval '%{_topdir}')
+          tar -czf ${RPMBUILD_TOP}/SOURCES/${NAME}-${{ env.VERSION}}.tar.gz -C build_tmp .
+          
+          # Place SPEC file
+          cp RPM/${NAME}.spec ${RPMBUILD_TOP}/SPECS/
+          
+          # Update version
+          sed -i "s/^Version:.*/Version:        ${{ env.VERSION }}/" ${RPMBUILD_TOP}/SPECS/${NAME}.spec
+          
+          # Execute build
+          rpmbuild -bb ${RPMBUILD_TOP}/SPECS/${NAME}.spec
+
+      - name: Upload RPM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # Upload artifacts with separate names (to avoid mixing)
+          name: rpm-package-${{ matrix.target }}
+          path: |
+            /github/home/rpmbuild/RPMS/noarch/*.rpm
+            /root/rpmbuild/RPMS/noarch/*.rpm
+          # * Paths depend on container user settings, so listing multiple is safer
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # Job 2: Build DEB (Ubuntu)
+  # ------------------------------------------------------------------
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Build DEB
+        run: |
+          NAME="ip-anycast-service"
+          BUILD_DIR="build_deb/${NAME}_${{ env.VERSION }}_all"
+          
+          mkdir -p ${BUILD_DIR}/DEBIAN
+          cp -r ip-anycast-service/* ${BUILD_DIR}/
+          
+          cp DEBIAN/control ${BUILD_DIR}/DEBIAN/
+          sed -i "s/^Version:.*/Version: ${{ env.VERSION }}/" ${BUILD_DIR}/DEBIAN/control
+          
+          if [ -f DEBIAN/postinst ]; then
+            cp DEBIAN/postinst ${BUILD_DIR}/DEBIAN/
+            chmod 755 ${BUILD_DIR}/DEBIAN/postinst
+          fi
+          
+          chmod 755 ${BUILD_DIR}/usr/sbin/ip-anycast-manager
+          
+          dpkg-deb --build ${BUILD_DIR}
+          
+          mkdir dist
+          mv build_deb/*.deb dist/
+
+      - name: Upload DEB Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: dist/*.deb
+
+  # ------------------------------------------------------------------
+  # Job 3: Release (Merge Artifacts)
+  # ------------------------------------------------------------------
+  create-release:
+    needs: [build-rpm, build-deb]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # Downloads all artifacts if name is not specified
+          path: ./dist
+          merge-multiple: true 
+          # ^ New feature in v4: Option to place files flat without separating folders
+
+      - name: List files
+        run: ls -R ./dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

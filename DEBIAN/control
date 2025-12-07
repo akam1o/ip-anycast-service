@@ -1,0 +1,8 @@
+Package: ip-anycast-service
+Version: 0.0.0
+Section: net
+Priority: optional
+Architecture: all
+Depends: bird2, iproute2, netcat-openbsd, curl, chrony
+Maintainer: akamio <kamio_akira@ark-networks.net>
+Description: Manages IP Anycast interface and BIRD configuration based on health checks.

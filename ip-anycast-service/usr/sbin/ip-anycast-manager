@@ -1,0 +1,159 @@
+#!/bin/bash
+set -u
+
+# Paths
+CONFIG_FILE="/etc/ip-anycast.conf"
+TEMPLATE_FILE="/etc/ip-anycast/bird.template"
+BIRD_CONF="/etc/bird/bird.conf"
+
+# 1. Load Configuration
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Error: Config file $CONFIG_FILE not found."
+    exit 1
+fi
+source "$CONFIG_FILE"
+
+# Logging helper
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [ip-anycast] $1"
+}
+
+# 2. Network Setup Function
+setup_interface() {
+    log "Setting up interface $INTERFACE_NAME..."
+    
+    # Remove existing interface to ensure a clean state
+    if ip link show "$INTERFACE_NAME" > /dev/null 2>&1; then
+        ip link del "$INTERFACE_NAME"
+    fi
+    
+    # Create dummy interface and assign IP
+    ip link add name "$INTERFACE_NAME" type dummy
+    ip addr add "$ANYCAST_CIDR" dev "$INTERFACE_NAME"
+    
+    # IMPORTANT: Initialize state as DOWN to prevent premature advertisement
+    ip link set "$INTERFACE_NAME" down
+}
+
+# 3. Generate BIRD Config Function
+generate_bird_config() {
+    log "Generating $BIRD_CONF from template..."
+    
+    # Dynamically build the neighbor configuration block
+    NEIGHBOR_BLOCK=""
+    count=0
+    for neighbor in $NEIGHBORS; do
+        neigh_ip=$(echo "$neighbor" | cut -d: -f1)
+        neigh_as=$(echo "$neighbor" | cut -d: -f2)
+        
+        # Validate that IP and AS are not empty
+        if [[ -z "$neigh_ip" || -z "$neigh_as" ]]; then
+            log "Warning: Invalid neighbor format '$neighbor'. Skipping."
+            continue
+        fi
+
+        NEIGHBOR_BLOCK+="protocol bgp upstream_$count from bgp_template { neighbor $neigh_ip as $neigh_as; }\n"
+        count=$((count+1))
+    done
+
+    # Create a temporary config file
+    cp "$TEMPLATE_FILE" "$BIRD_CONF.tmp"
+
+    # Replace basic placeholders
+    sed -i "s|__ROUTER_ID__|$ROUTER_ID|g"           "$BIRD_CONF.tmp"
+    sed -i "s|__ANYCAST_CIDR__|$ANYCAST_CIDR|g"     "$BIRD_CONF.tmp"
+    sed -i "s|__INTERFACE_NAME__|$INTERFACE_NAME|g" "$BIRD_CONF.tmp"
+    sed -i "s|__LOCAL_AS__|$LOCAL_AS|g"             "$BIRD_CONF.tmp"
+    sed -i "s|__SOURCE_IP__|$SOURCE_IP|g"           "$BIRD_CONF.tmp"
+    
+    # Replace BFD placeholders
+    sed -i "s|__BFD_INTERVAL__|$BFD_INTERVAL|g"     "$BIRD_CONF.tmp"
+    sed -i "s|__BFD_IDLE_TX__|$BFD_IDLE_TX|g"       "$BIRD_CONF.tmp"
+    sed -i "s|__BFD_MULTIPLIER__|$BFD_MULTIPLIER|g" "$BIRD_CONF.tmp"
+    
+    # Insert Neighbor block (remove placeholder and append block)
+    sed -i "s|__NEIGHBOR_CONFIG__||g" "$BIRD_CONF.tmp"
+    echo -e "$NEIGHBOR_BLOCK" >> "$BIRD_CONF.tmp"
+
+    # Apply the new configuration
+    mv "$BIRD_CONF.tmp" "$BIRD_CONF"
+}
+
+# 4. Health Check Function
+check_health() {
+    case "$APP_TYPE" in
+        "ntp")
+            # Check if chrony is synchronized and offset is acceptable (< 100ms)
+            chronyc tracking > /dev/null 2>&1 && \
+            chronyc -c tracking | awk -F, '{if ($5 < 0.1 && $5 > -0.1) exit 0; else exit 1}'
+            ;;
+        "ldap")
+            # Check TCP connection to LDAP port 389
+            nc -z -w 2 127.0.0.1 389
+            ;;
+        "dns")
+            # Check if DNS responds to a query for root
+            dig +short +time=2 +tries=1 @127.0.0.1 . > /dev/null 2>&1
+            ;;
+        "aptly")
+            # Check TCP connection to Aptly API/Web port (assuming 8080)
+            nc -z -w 2 127.0.0.1 8080
+            ;;
+        "custom")
+            if [ -n "$CUSTOM_CHECK_CMD" ]; then
+                $CUSTOM_CHECK_CMD
+            else
+                log "Error: Custom check selected but CUSTOM_CHECK_CMD is empty."
+                return 1
+            fi
+            ;;
+        *)
+            log "Error: Unknown APP_TYPE: $APP_TYPE"
+            return 1
+            ;;
+    esac
+}
+
+# --- Main Execution Logic ---
+
+# Cleanup function to remove interface on service stop
+cleanup() {
+    log "Stopping service. Removing interface $INTERFACE_NAME..."
+    ip link set "$INTERFACE_NAME" down 2>/dev/null
+    ip link del "$INTERFACE_NAME" 2>/dev/null
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
+
+# Initialize
+setup_interface
+generate_bird_config
+
+log "Restarting BIRD daemon to apply new configuration..."
+systemctl restart bird
+# Wait briefly to ensure BIRD is up
+sleep 2
+
+log "Starting health check loop for APP_TYPE: $APP_TYPE"
+
+# Loop
+while true; do
+    # Check current interface state
+    IS_UP=$(ip link show "$INTERFACE_NAME" | grep -q "UP" && echo "yes" || echo "no")
+    
+    if check_health; then
+        # Application is HEALTHY
+        if [ "$IS_UP" == "no" ]; then
+            log "Health check PASSED. Bringing UP $INTERFACE_NAME (Advertise)."
+            ip link set "$INTERFACE_NAME" up
+        fi
+    else
+        # Application is UNHEALTHY
+        if [ "$IS_UP" == "yes" ]; then
+            log "Health check FAILED. Bringing DOWN $INTERFACE_NAME (Withdraw)."
+            ip link set "$INTERFACE_NAME" down
+        fi
+    fi
+    
+    sleep 5
+done

@@ -1,0 +1,61 @@
+log stderr { info, remote, warning, error, auth, fatal, bug };
+log "/var/log/bird/bird.log" { info, remote, warning, error, auth, fatal, bug };
+
+router id __ROUTER_ID__;
+
+# --- Filters ---
+
+filter anycast_export_filter {
+    # Only export the specific Anycast CIDR
+    if net = __ANYCAST_CIDR__ then accept;
+    reject;
+}
+
+filter bgp_import_filter {
+    reject;
+}
+
+# --- Protocols ---
+
+protocol device {
+    # Using default scan time (usually 60s) or explicit 20s if preferred
+    scan time 20;
+}
+
+protocol direct {
+    # Monitor the dummy interface managed by the service
+    interface "__INTERFACE_NAME__";
+}
+
+protocol kernel {
+    learn;
+    persist;
+    scan time 20;
+    # Export routes to kernel if necessary, otherwise restrict
+    export all;
+}
+
+protocol bfd bfd_basic {
+    multihop {
+        interval __BFD_INTERVAL__;
+        idle tx interval __BFD_IDLE_TX__;
+        multiplier __BFD_MULTIPLIER__;
+    };
+}
+
+# --- BGP Template ---
+
+template bgp bgp_template {
+    local as __LOCAL_AS__;
+    multihop;
+    next hop self;
+    add paths on;
+    graceful restart;
+    bfd;
+    import filter bgp_import_filter;
+    export filter anycast_export_filter;
+    source address __SOURCE_IP__;
+}
+
+# --- Neighbors (Dynamically Inserted) ---
+__NEIGHBOR_CONFIG__

@@ -1,0 +1,19 @@
+[Unit]
+Description=IP Anycast Manager Service
+# Ensure network is ready before starting
+After=network.target network-online.target sys-subsystem-net-devices-lo.device
+# We need BIRD installed, but not necessarily running before this starts (as this script restarts it)
+Wants=bird.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/ip-anycast-manager
+# Restart automatically if the script crashes
+Restart=always
+RestartSec=5
+User=root
+# Allow time for cleanup trap to run
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
