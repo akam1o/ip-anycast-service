@@ -1,5 +1,4 @@
 log stderr { info, remote, warning, error, auth, fatal, bug };
-log "/var/log/bird/bird.log" { info, remote, warning, error, auth, fatal, bug };
 
 router id __ROUTER_ID__;
 
@@ -50,14 +49,14 @@ protocol bfd bfd_basic {
 template bgp bgp_template {
     local as __LOCAL_AS__;
     multihop;
-    next hop self;
-    add paths on;
     graceful restart;
     bfd;
     
     ipv4 {
         import filter bgp_import_filter;
         export filter anycast_export_filter;
+        next hop self;
+        add paths on;
     };
     
     source address __SOURCE_IP__;
