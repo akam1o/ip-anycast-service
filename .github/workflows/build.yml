@@ -73,14 +73,16 @@ jobs:
           # Execute build
           rpmbuild -bb ${RPMBUILD_TOP}/SPECS/${NAME}.spec
 
+          # Copy RPMs to workspace for upload
+          mkdir -p dist_rpm
+          cp ${RPMBUILD_TOP}/RPMS/noarch/*.rpm dist_rpm/
+
       - name: Upload RPM Artifact
         uses: actions/upload-artifact@v4
         with:
           # Upload artifacts with separate names (to avoid mixing)
           name: rpm-package-${{ matrix.target }}
-          path: |
-            /github/home/rpmbuild/RPMS/noarch/*.rpm
-            /root/rpmbuild/RPMS/noarch/*.rpm
+          path: dist_rpm/*.rpm
           # * Paths depend on container user settings, so listing multiple is safer
           if-no-files-found: error
 

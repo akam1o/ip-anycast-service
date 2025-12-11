@@ -2,7 +2,7 @@
 set -u
 
 # Paths
-CONFIG_FILE="/etc/ip-anycast.conf"
+CONFIG_FILE="/etc/ip-anycast/ip-anycast.conf"
 TEMPLATE_FILE="/etc/ip-anycast/bird.template"
 BIRD_CONF="/etc/bird/bird.conf"
 
