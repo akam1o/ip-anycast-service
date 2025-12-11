@@ -25,14 +25,16 @@ protocol device {
 protocol direct {
     # Monitor the dummy interface managed by the service
     interface "__INTERFACE_NAME__";
+    ipv4;
 }
 
 protocol kernel {
-    learn;
+    ipv4 {
+        import all;
+        export all;
+    };
     persist;
     scan time 20;
-    # Export routes to kernel if necessary, otherwise restrict
-    export all;
 }
 
 protocol bfd bfd_basic {
@@ -52,8 +54,12 @@ template bgp bgp_template {
     add paths on;
     graceful restart;
     bfd;
-    import filter bgp_import_filter;
-    export filter anycast_export_filter;
+    
+    ipv4 {
+        import filter bgp_import_filter;
+        export filter anycast_export_filter;
+    };
+    
     source address __SOURCE_IP__;
 }
 
