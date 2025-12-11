@@ -117,6 +117,11 @@ jobs:
             chmod 755 ${BUILD_DIR}/DEBIAN/postinst
           fi
           
+          if [ -f DEBIAN/conffiles ]; then
+            cp DEBIAN/conffiles ${BUILD_DIR}/DEBIAN/
+            chmod 644 ${BUILD_DIR}/DEBIAN/conffiles
+          fi
+          
           chmod 755 ${BUILD_DIR}/usr/sbin/ip-anycast-manager
           
           dpkg-deb --build ${BUILD_DIR}
