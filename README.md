@@ -30,7 +30,7 @@ sudo apt-get install -f  # Install missing dependencies
 
 ## Configuration
 
-The main configuration file is located at `/etc/ip-anycast.conf`.
+The main configuration file is located at `/etc/ip-anycast/ip-anycast.conf`.
 
 ### Basic Settings
 
