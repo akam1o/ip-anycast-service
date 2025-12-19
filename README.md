@@ -8,7 +8,7 @@ This service ensures that your Anycast IP address is only advertised to the netw
 
 ## Features
 
-- **Health Monitoring**: Built-in health checks for common services (NTP, LDAP, DNS, Aptly) and support for custom check commands.
+- **Health Monitoring**: Built-in health checks for common services (HTTP, HTTPS, NTP, DNS, LDAP) and support for custom check commands.
 - **Dynamic BGP Announcement**: Automatically reconfigures BIRD to advertise the Anycast IP when healthy and withdraw it when unhealthy.
 - **Interface Management**: Automatically creates and manages a dummy interface for the Anycast IP.
 - **BFD Support**: Configurable BFD (Bidirectional Forwarding Detection) settings for fast failure detection.
@@ -36,7 +36,7 @@ The main configuration file is located at `/etc/ip-anycast.conf`.
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
-| `APP_TYPE` | Type of application to monitor (`ntp`, `ldap`, `dns`, `aptly`, `custom`) | `ntp` |
+| `APP_TYPE` | Type of application to monitor (`http`, `https`, `ntp`, `dns`, `ldap`, `custom`) | `ntp` |
 | `ANYCAST_CIDR` | The Anycast IP address with CIDR prefix | `192.168.10.1/32` |
 | `INTERFACE_NAME` | Name of the dummy interface to create | `anycast0` |
 
@@ -84,7 +84,7 @@ journalctl -u ip-anycast -f
 - `bash`
 - `iproute2`
 - `systemd`
-- Service-specific tools: `bind-utils` (DNS), `nmap-ncat` (LDAP), `chrony` (NTP), `curl` (Aptly)
+- Service-specific tools: `bind-utils` (DNS), `nmap-ncat` (LDAP), `chrony` (NTP), `curl` (HTTP/HTTPS)
 
 ## License
 
