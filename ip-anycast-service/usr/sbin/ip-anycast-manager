@@ -82,22 +82,26 @@ generate_bird_config() {
 # 4. Health Check Function
 check_health() {
     case "$APP_TYPE" in
+        "http")
+            # Check HTTP connection to localhost
+            curl -s -f -o /dev/null http://127.0.0.1
+            ;;
+        "https")
+            # Check HTTPS connection to localhost (ignoring cert errors)
+            curl -k -s -f -o /dev/null https://127.0.0.1
+            ;;
         "ntp")
             # Check if chrony is synchronized and offset is acceptable (< 100ms)
             chronyc tracking > /dev/null 2>&1 && \
             chronyc -c tracking | awk -F, '{if ($5 < 0.1 && $5 > -0.1) exit 0; else exit 1}'
             ;;
-        "ldap")
-            # Check TCP connection to LDAP port 389
-            nc -z -w 2 127.0.0.1 389
-            ;;
         "dns")
             # Check if DNS responds to a query for root
             dig +short +time=2 +tries=1 @127.0.0.1 . > /dev/null 2>&1
             ;;
-        "aptly")
-            # Check TCP connection to Aptly API/Web port (assuming 8080)
-            nc -z -w 2 127.0.0.1 8080
+        "ldap")
+            # Check TCP connection to LDAP port 389
+            nc -z -w 2 127.0.0.1 389
             ;;
         "custom")
             if [ -n "$CUSTOM_CHECK_CMD" ]; then
