@@ -18,7 +18,7 @@ filter bgp_import_filter {
 
 protocol device {
     # Using default scan time (usually 60s) or explicit 20s if preferred
-    scan time 20;
+    scan time 5;
 }
 
 protocol direct {
@@ -29,11 +29,11 @@ protocol direct {
 
 protocol kernel {
     ipv4 {
-        import all;
-        export all;
+        import none;
+        export none;
     };
     persist;
-    scan time 20;
+    scan time 5;
 }
 
 protocol bfd bfd_basic {

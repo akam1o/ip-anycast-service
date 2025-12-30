@@ -36,13 +36,13 @@ dynamically based on application health checks.
 # Create directories
 mkdir -p %{buildroot}/etc/ip-anycast
 mkdir -p %{buildroot}/usr/sbin
-mkdir -p %{buildroot}/usr/lib/systemd/system
+mkdir -p %{buildroot}%{_unitdir}
 
 # Install files (copy contents of tar.gz to buildroot)
 install -m 644 etc/ip-anycast/ip-anycast.conf %{buildroot}/etc/ip-anycast/ip-anycast.conf
 install -m 644 etc/ip-anycast/bird.template %{buildroot}/etc/ip-anycast/bird.template
 install -m 755 usr/sbin/ip-anycast-manager %{buildroot}/usr/sbin/ip-anycast-manager
-install -m 644 usr/lib/systemd/system/ip-anycast.service %{buildroot}/usr/lib/systemd/system/ip-anycast.service
+install -m 644 lib/systemd/system/ip-anycast.service %{buildroot}%{_unitdir}/ip-anycast.service
 
 %files
 # Configuration files are not overwritten on update; .rpmnew files are created instead
@@ -50,7 +50,7 @@ install -m 644 usr/lib/systemd/system/ip-anycast.service %{buildroot}/usr/lib/sy
 %dir /etc/ip-anycast
 /etc/ip-anycast/bird.template
 /usr/sbin/ip-anycast-manager
-/usr/lib/systemd/system/ip-anycast.service
+%{_unitdir}/ip-anycast.service
 
 %post
 %systemd_post ip-anycast.service
