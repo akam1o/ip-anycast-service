@@ -1,21 +1,75 @@
 #!/bin/bash
-set -u
+set -euo pipefail
 
 # Paths
 CONFIG_FILE="/etc/ip-anycast/ip-anycast.conf"
 TEMPLATE_FILE="/etc/ip-anycast/bird.template"
 BIRD_CONF="/etc/bird/bird.conf"
 
+warn() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [ip-anycast] WARNING: $1" >&2
+}
+
 # 1. Load Configuration
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "Error: Config file $CONFIG_FILE not found."
     exit 1
 fi
+
+# Refuse to source an unsafe config file (ownership/perms).
+if command -v stat >/dev/null 2>&1; then
+    owner="$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null || true)"
+    perms="$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null || true)"
+    if [ -n "$owner" ] && [ "$owner" != "root" ]; then
+        echo "Error: Refusing to load $CONFIG_FILE (owner is '$owner', expected 'root')." >&2
+        exit 1
+    fi
+    if [ -n "$perms" ]; then
+        group_write=$(( (10#$perms / 10) % 10 ))
+        other_write=$(( 10#$perms % 10 ))
+        if [ $((group_write & 2)) -ne 0 ] || [ $((other_write & 2)) -ne 0 ]; then
+            echo "Error: Refusing to load $CONFIG_FILE (writable by group/others: mode $perms)." >&2
+            exit 1
+        fi
+    fi
+else
+    warn "stat not found; skipping config permission checks."
+fi
+
 source "$CONFIG_FILE"
 
 # Logging helper
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [ip-anycast] $1"
+}
+
+require_var() {
+    local name="$1"
+    local value="${!name-}"
+    if [ -z "${value}" ]; then
+        echo "Error: Required config '$name' is missing or empty in $CONFIG_FILE." >&2
+        exit 1
+    fi
+}
+
+# Optional settings (can be overridden in config)
+HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-2}"
+HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-5}"
+
+require_var "APP_TYPE"
+require_var "ANYCAST_CIDR"
+require_var "INTERFACE_NAME"
+require_var "ROUTER_ID"
+require_var "LOCAL_AS"
+require_var "SOURCE_IP"
+require_var "NEIGHBORS"
+require_var "BFD_INTERVAL"
+require_var "BFD_IDLE_TX"
+require_var "BFD_MULTIPLIER"
+
+escape_sed_replacement() {
+    # Escape backslash, &, and the delimiter (|)
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g'
 }
 
 # 2. Network Setup Function
@@ -60,16 +114,16 @@ generate_bird_config() {
     cp "$TEMPLATE_FILE" "$BIRD_CONF.tmp"
 
     # Replace basic placeholders
-    sed -i "s|__ROUTER_ID__|$ROUTER_ID|g"           "$BIRD_CONF.tmp"
-    sed -i "s|__ANYCAST_CIDR__|$ANYCAST_CIDR|g"     "$BIRD_CONF.tmp"
-    sed -i "s|__INTERFACE_NAME__|$INTERFACE_NAME|g" "$BIRD_CONF.tmp"
-    sed -i "s|__LOCAL_AS__|$LOCAL_AS|g"             "$BIRD_CONF.tmp"
-    sed -i "s|__SOURCE_IP__|$SOURCE_IP|g"           "$BIRD_CONF.tmp"
+    sed -i "s|__ROUTER_ID__|$(escape_sed_replacement "$ROUTER_ID")|g"           "$BIRD_CONF.tmp"
+    sed -i "s|__ANYCAST_CIDR__|$(escape_sed_replacement "$ANYCAST_CIDR")|g"     "$BIRD_CONF.tmp"
+    sed -i "s|__INTERFACE_NAME__|$(escape_sed_replacement "$INTERFACE_NAME")|g" "$BIRD_CONF.tmp"
+    sed -i "s|__LOCAL_AS__|$(escape_sed_replacement "$LOCAL_AS")|g"             "$BIRD_CONF.tmp"
+    sed -i "s|__SOURCE_IP__|$(escape_sed_replacement "$SOURCE_IP")|g"           "$BIRD_CONF.tmp"
     
     # Replace BFD placeholders
-    sed -i "s|__BFD_INTERVAL__|$BFD_INTERVAL|g"     "$BIRD_CONF.tmp"
-    sed -i "s|__BFD_IDLE_TX__|$BFD_IDLE_TX|g"       "$BIRD_CONF.tmp"
-    sed -i "s|__BFD_MULTIPLIER__|$BFD_MULTIPLIER|g" "$BIRD_CONF.tmp"
+    sed -i "s|__BFD_INTERVAL__|$(escape_sed_replacement "$BFD_INTERVAL")|g"     "$BIRD_CONF.tmp"
+    sed -i "s|__BFD_IDLE_TX__|$(escape_sed_replacement "$BFD_IDLE_TX")|g"       "$BIRD_CONF.tmp"
+    sed -i "s|__BFD_MULTIPLIER__|$(escape_sed_replacement "$BFD_MULTIPLIER")|g" "$BIRD_CONF.tmp"
     
     # Insert Neighbor block (remove placeholder and append block)
     sed -i "s|__NEIGHBOR_CONFIG__||g" "$BIRD_CONF.tmp"
@@ -79,16 +133,42 @@ generate_bird_config() {
     mv "$BIRD_CONF.tmp" "$BIRD_CONF"
 }
 
+reload_bird() {
+    log "Applying BIRD configuration..."
+
+    if systemctl is-active --quiet bird; then
+        if command -v birdc >/dev/null 2>&1; then
+            if birdc configure >/dev/null 2>&1; then
+                log "BIRD reloaded via 'birdc configure'."
+                return 0
+            fi
+            warn "'birdc configure' failed; falling back to systemd reload/restart."
+        fi
+
+        if systemctl reload bird >/dev/null 2>&1; then
+            log "BIRD reloaded via 'systemctl reload bird'."
+            return 0
+        fi
+
+        warn "'systemctl reload bird' failed; restarting bird."
+        systemctl restart bird
+        return 0
+    fi
+
+    log "BIRD is not active; starting bird."
+    systemctl start bird
+}
+
 # 4. Health Check Function
 check_health() {
     case "$APP_TYPE" in
         "http")
             # Check HTTP connection to localhost
-            curl -s -f -o /dev/null http://127.0.0.1
+            curl -s -f --connect-timeout "$HEALTHCHECK_TIMEOUT_SECONDS" --max-time "$HEALTHCHECK_TIMEOUT_SECONDS" -o /dev/null http://127.0.0.1
             ;;
         "https")
             # Check HTTPS connection to localhost (ignoring cert errors)
-            curl -k -s -f -o /dev/null https://127.0.0.1
+            curl -k -s -f --connect-timeout "$HEALTHCHECK_TIMEOUT_SECONDS" --max-time "$HEALTHCHECK_TIMEOUT_SECONDS" -o /dev/null https://127.0.0.1
             ;;
         "ntp")
             # Check if chrony is synchronized and offset is acceptable (< 100ms)
@@ -104,8 +184,12 @@ check_health() {
             nc -z -w 2 127.0.0.1 389
             ;;
         "custom")
-            if [ -n "$CUSTOM_CHECK_CMD" ]; then
-                $CUSTOM_CHECK_CMD
+            if [ -n "${CUSTOM_CHECK_CMD:-}" ]; then
+                if [ ! -x "$CUSTOM_CHECK_CMD" ]; then
+                    log "Error: CUSTOM_CHECK_CMD is not executable: $CUSTOM_CHECK_CMD"
+                    return 1
+                fi
+                "$CUSTOM_CHECK_CMD"
             else
                 log "Error: Custom check selected but CUSTOM_CHECK_CMD is empty."
                 return 1
@@ -133,9 +217,8 @@ trap cleanup SIGINT SIGTERM
 setup_interface
 generate_bird_config
 
-log "Restarting BIRD daemon to apply new configuration..."
-systemctl restart bird
-# Wait briefly to ensure BIRD is up
+reload_bird
+# Wait briefly to ensure BIRD has applied config
 sleep 2
 
 log "Starting health check loop for APP_TYPE: $APP_TYPE"
@@ -159,5 +242,5 @@ while true; do
         fi
     fi
     
-    sleep 5
+    sleep "$HEALTHCHECK_INTERVAL_SECONDS"
 done

@@ -56,7 +56,14 @@ If `APP_TYPE` is set to `custom`, define your check command:
 ```bash
 CUSTOM_CHECK_CMD="/usr/local/bin/my_check_script.sh"
 ```
-The command should return exit code `0` for healthy and non-zero for unhealthy.
+The command should be an executable file path and return exit code `0` for healthy and non-zero for unhealthy.
+
+### Health Check Timing (Optional)
+
+```bash
+HEALTHCHECK_TIMEOUT_SECONDS="2"
+HEALTHCHECK_INTERVAL_SECONDS="5"
+```
 
 ## Usage
 
