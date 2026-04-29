@@ -9,7 +9,7 @@ Source0:        %{name}-%{version}.tar.gz
 # ./etc/ip-anycast/ip-anycast.conf
 # ./etc/ip-anycast/bird.template
 # ./usr/sbin/ip-anycast-manager
-# ./usr/lib/systemd/system/ip-anycast.service
+# ./lib/systemd/system/ip-anycast.service
 
 BuildArch:      noarch
 BuildRequires:  systemd-rpm-macros
