@@ -22,8 +22,10 @@ protocol device {
 }
 
 protocol direct {
-    # Monitor the dummy interface managed by the service
+    # Monitor the dummy interface managed by the service.
+    # Withdraw the direct route when the service brings the link down.
     interface "__INTERFACE_NAME__";
+    check link;
     ipv4;
 }
 
