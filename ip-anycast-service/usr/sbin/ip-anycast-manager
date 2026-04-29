@@ -12,6 +12,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 source "$CONFIG_FILE"
+BIRD_CONF="${BIRD_CONF:-/etc/bird/bird.conf}"
 
 # Logging helper
 log() {
