@@ -188,8 +188,8 @@ reload_bird() {
             return 0
         fi
 
-        warn "Failed to reload active BIRD service; leaving the running daemon unchanged."
-        return 0
+        warn "Failed to reload active BIRD service; refusing to continue with the running daemon unchanged."
+        return 1
     fi
 
     log "BIRD is not active; starting bird."
@@ -201,24 +201,24 @@ check_health() {
     case "$APP_TYPE" in
         "http")
             # Check HTTP connection to localhost
-            curl -s -f --connect-timeout "$HEALTHCHECK_TIMEOUT_SECONDS" --max-time "$HEALTHCHECK_TIMEOUT_SECONDS" -o /dev/null http://127.0.0.1
+            curl -s -f --connect-timeout "$HEALTHCHECK_TIMEOUT_SECONDS" --max-time "$HEALTHCHECK_TIMEOUT_SECONDS" -o /dev/null http://127.0.0.1 || return 1
             ;;
         "https")
             # Check HTTPS connection to localhost (ignoring cert errors)
-            curl -k -s -f --connect-timeout "$HEALTHCHECK_TIMEOUT_SECONDS" --max-time "$HEALTHCHECK_TIMEOUT_SECONDS" -o /dev/null https://127.0.0.1
+            curl -k -s -f --connect-timeout "$HEALTHCHECK_TIMEOUT_SECONDS" --max-time "$HEALTHCHECK_TIMEOUT_SECONDS" -o /dev/null https://127.0.0.1 || return 1
             ;;
         "ntp")
             # Check if chrony is synchronized and offset is acceptable (< 100ms)
             chronyc tracking > /dev/null 2>&1 && \
-            chronyc -c tracking | awk -F, '{if ($5 < 0.1 && $5 > -0.1) exit 0; else exit 1}'
+            chronyc -c tracking | awk -F, '{if ($5 < 0.1 && $5 > -0.1) exit 0; else exit 1}' || return 1
             ;;
         "dns")
             # Check if DNS responds to a query for root
-            dig +short "+time=${HEALTHCHECK_TIMEOUT_SECONDS}" +tries=1 @127.0.0.1 . > /dev/null 2>&1
+            dig +short "+time=${HEALTHCHECK_TIMEOUT_SECONDS}" +tries=1 @127.0.0.1 . > /dev/null 2>&1 || return 1
             ;;
         "ldap")
             # Check TCP connection to LDAP port 389
-            nc -z -w "$HEALTHCHECK_TIMEOUT_SECONDS" 127.0.0.1 389
+            nc -z -w "$HEALTHCHECK_TIMEOUT_SECONDS" 127.0.0.1 389 || return 1
             ;;
         "custom")
             if [ -n "${CUSTOM_CHECK_CMD:-}" ]; then
@@ -226,7 +226,7 @@ check_health() {
                     log "Error: CUSTOM_CHECK_CMD is not executable: $CUSTOM_CHECK_CMD"
                     return 1
                 fi
-                "$CUSTOM_CHECK_CMD"
+                "$CUSTOM_CHECK_CMD" || return 1
             else
                 log "Error: Custom check selected but CUSTOM_CHECK_CMD is empty."
                 return 1
