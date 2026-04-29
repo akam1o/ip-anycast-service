@@ -54,11 +54,6 @@ jobs:
           mkdir -p build_tmp/${NAME}-${{ env.VERSION }}
           cp -r ip-anycast-service/* build_tmp/${NAME}-${{ env.VERSION }}/
           
-          # Move lib/systemd to usr/lib/systemd (Spec file expects usr/lib/systemd)
-          mkdir -p build_tmp/${NAME}-${{ env.VERSION }}/usr/lib
-          mv build_tmp/${NAME}-${{ env.VERSION }}/lib/systemd build_tmp/${NAME}-${{ env.VERSION }}/usr/lib/
-          rm -rf build_tmp/${NAME}-${{ env.VERSION }}/lib
-          
           # Create source tarball
           # Resolve path safely as it depends on environment (user home /github/home or /root)
           RPMBUILD_TOP=$(rpm --eval '%{_topdir}')
