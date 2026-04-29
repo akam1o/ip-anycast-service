@@ -17,7 +17,7 @@ filter bgp_import_filter {
 # --- Protocols ---
 
 protocol device {
-    # Using default scan time (usually 60s) or explicit 20s if preferred
+    # Use an explicit 5s scan time
     scan time 5;
 }
 

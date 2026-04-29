@@ -17,23 +17,28 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 # Refuse to source an unsafe config file (ownership/perms).
-if command -v stat >/dev/null 2>&1; then
-    owner="$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null || true)"
-    perms="$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null || true)"
-    if [ -n "$owner" ] && [ "$owner" != "root" ]; then
-        echo "Error: Refusing to load $CONFIG_FILE (owner is '$owner', expected 'root')." >&2
-        exit 1
-    fi
-    if [ -n "$perms" ]; then
-        group_write=$(( (10#$perms / 10) % 10 ))
-        other_write=$(( 10#$perms % 10 ))
-        if [ $((group_write & 2)) -ne 0 ] || [ $((other_write & 2)) -ne 0 ]; then
-            echo "Error: Refusing to load $CONFIG_FILE (writable by group/others: mode $perms)." >&2
-            exit 1
-        fi
-    fi
-else
-    warn "stat not found; skipping config permission checks."
+if ! command -v stat >/dev/null 2>&1; then
+    echo "Error: stat not found; refusing to load $CONFIG_FILE without permission checks." >&2
+    exit 1
+fi
+
+if ! owner_uid="$(stat -c '%u' "$CONFIG_FILE" 2>/dev/null)"; then
+    echo "Error: Unable to read owner UID for $CONFIG_FILE." >&2
+    exit 1
+fi
+if ! perms="$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)"; then
+    echo "Error: Unable to read permissions for $CONFIG_FILE." >&2
+    exit 1
+fi
+if [ "$owner_uid" != "0" ]; then
+    echo "Error: Refusing to load $CONFIG_FILE (owner uid is '$owner_uid', expected '0')." >&2
+    exit 1
+fi
+group_write=$(( (10#$perms / 10) % 10 ))
+other_write=$(( 10#$perms % 10 ))
+if [ $((group_write & 2)) -ne 0 ] || [ $((other_write & 2)) -ne 0 ]; then
+    echo "Error: Refusing to load $CONFIG_FILE (writable by group/others: mode $perms)." >&2
+    exit 1
 fi
 
 source "$CONFIG_FILE"
@@ -52,9 +57,20 @@ require_var() {
     fi
 }
 
+require_positive_integer() {
+    local name="$1"
+    local value="${!name-}"
+    if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: Config '$name' must be a positive integer number of seconds in $CONFIG_FILE." >&2
+        exit 1
+    fi
+}
+
 # Optional settings (can be overridden in config)
 HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-2}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-5}"
+require_positive_integer "HEALTHCHECK_TIMEOUT_SECONDS"
+require_positive_integer "HEALTHCHECK_INTERVAL_SECONDS"
 
 require_var "APP_TYPE"
 require_var "ANYCAST_CIDR"
@@ -70,6 +86,22 @@ require_var "BFD_MULTIPLIER"
 escape_sed_replacement() {
     # Escape backslash, &, and the delimiter (|)
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g'
+}
+
+validate_bird_config() {
+    local config_path="$1"
+
+    if ! command -v bird >/dev/null 2>&1; then
+        warn "bird command not found; skipping generated config validation."
+        return 0
+    fi
+
+    if bird -p -c "$config_path" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "Error: Generated BIRD config failed validation: $config_path" >&2
+    return 1
 }
 
 # 2. Network Setup Function
@@ -92,6 +124,7 @@ setup_interface() {
 # 3. Generate BIRD Config Function
 generate_bird_config() {
     log "Generating $BIRD_CONF from template..."
+    local tmp_conf="$BIRD_CONF.tmp"
     
     # Dynamically build the neighbor configuration block
     NEIGHBOR_BLOCK=""
@@ -111,26 +144,31 @@ generate_bird_config() {
     done
 
     # Create a temporary config file
-    cp "$TEMPLATE_FILE" "$BIRD_CONF.tmp"
+    cp "$TEMPLATE_FILE" "$tmp_conf"
 
     # Replace basic placeholders
-    sed -i "s|__ROUTER_ID__|$(escape_sed_replacement "$ROUTER_ID")|g"           "$BIRD_CONF.tmp"
-    sed -i "s|__ANYCAST_CIDR__|$(escape_sed_replacement "$ANYCAST_CIDR")|g"     "$BIRD_CONF.tmp"
-    sed -i "s|__INTERFACE_NAME__|$(escape_sed_replacement "$INTERFACE_NAME")|g" "$BIRD_CONF.tmp"
-    sed -i "s|__LOCAL_AS__|$(escape_sed_replacement "$LOCAL_AS")|g"             "$BIRD_CONF.tmp"
-    sed -i "s|__SOURCE_IP__|$(escape_sed_replacement "$SOURCE_IP")|g"           "$BIRD_CONF.tmp"
+    sed -i "s|__ROUTER_ID__|$(escape_sed_replacement "$ROUTER_ID")|g"           "$tmp_conf"
+    sed -i "s|__ANYCAST_CIDR__|$(escape_sed_replacement "$ANYCAST_CIDR")|g"     "$tmp_conf"
+    sed -i "s|__INTERFACE_NAME__|$(escape_sed_replacement "$INTERFACE_NAME")|g" "$tmp_conf"
+    sed -i "s|__LOCAL_AS__|$(escape_sed_replacement "$LOCAL_AS")|g"             "$tmp_conf"
+    sed -i "s|__SOURCE_IP__|$(escape_sed_replacement "$SOURCE_IP")|g"           "$tmp_conf"
     
     # Replace BFD placeholders
-    sed -i "s|__BFD_INTERVAL__|$(escape_sed_replacement "$BFD_INTERVAL")|g"     "$BIRD_CONF.tmp"
-    sed -i "s|__BFD_IDLE_TX__|$(escape_sed_replacement "$BFD_IDLE_TX")|g"       "$BIRD_CONF.tmp"
-    sed -i "s|__BFD_MULTIPLIER__|$(escape_sed_replacement "$BFD_MULTIPLIER")|g" "$BIRD_CONF.tmp"
+    sed -i "s|__BFD_INTERVAL__|$(escape_sed_replacement "$BFD_INTERVAL")|g"     "$tmp_conf"
+    sed -i "s|__BFD_IDLE_TX__|$(escape_sed_replacement "$BFD_IDLE_TX")|g"       "$tmp_conf"
+    sed -i "s|__BFD_MULTIPLIER__|$(escape_sed_replacement "$BFD_MULTIPLIER")|g" "$tmp_conf"
     
     # Insert Neighbor block (remove placeholder and append block)
-    sed -i "s|__NEIGHBOR_CONFIG__||g" "$BIRD_CONF.tmp"
-    echo -e "$NEIGHBOR_BLOCK" >> "$BIRD_CONF.tmp"
+    sed -i "s|__NEIGHBOR_CONFIG__||g" "$tmp_conf"
+    printf '%b' "$NEIGHBOR_BLOCK" >> "$tmp_conf"
+
+    if ! validate_bird_config "$tmp_conf"; then
+        rm -f "$tmp_conf"
+        return 1
+    fi
 
     # Apply the new configuration
-    mv "$BIRD_CONF.tmp" "$BIRD_CONF"
+    mv "$tmp_conf" "$BIRD_CONF"
 }
 
 reload_bird() {
@@ -142,7 +180,7 @@ reload_bird() {
                 log "BIRD reloaded via 'birdc configure'."
                 return 0
             fi
-            warn "'birdc configure' failed; falling back to systemd reload/restart."
+            warn "'birdc configure' failed; falling back to systemd reload."
         fi
 
         if systemctl reload bird >/dev/null 2>&1; then
@@ -150,8 +188,7 @@ reload_bird() {
             return 0
         fi
 
-        warn "'systemctl reload bird' failed; restarting bird."
-        systemctl restart bird
+        warn "Failed to reload active BIRD service; leaving the running daemon unchanged."
         return 0
     fi
 
@@ -177,11 +214,11 @@ check_health() {
             ;;
         "dns")
             # Check if DNS responds to a query for root
-            dig +short +time=2 +tries=1 @127.0.0.1 . > /dev/null 2>&1
+            dig +short "+time=${HEALTHCHECK_TIMEOUT_SECONDS}" +tries=1 @127.0.0.1 . > /dev/null 2>&1
             ;;
         "ldap")
             # Check TCP connection to LDAP port 389
-            nc -z -w 2 127.0.0.1 389
+            nc -z -w "$HEALTHCHECK_TIMEOUT_SECONDS" 127.0.0.1 389
             ;;
         "custom")
             if [ -n "${CUSTOM_CHECK_CMD:-}" ]; then
@@ -214,8 +251,9 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 # Initialize
-setup_interface
+# Validate BIRD config before touching the managed interface.
 generate_bird_config
+setup_interface
 
 reload_bird
 # Wait briefly to ensure BIRD has applied config
