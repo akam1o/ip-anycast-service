@@ -48,6 +48,7 @@ The main configuration file is located at `/etc/ip-anycast/ip-anycast.conf`.
 | `LOCAL_AS` | Local Autonomous System number | `65001` |
 | `SOURCE_IP` | Source IP for BGP sessions | `10.0.0.5` |
 | `NEIGHBORS` | Space-separated list of upstream neighbors (`IP:AS`) | `10.0.0.1:64512 10.0.0.2:64512` |
+| `BIRD_CONF` | Path to the generated BIRD configuration file | `/etc/bird/bird.conf` |
 
 ### Custom Health Check
 
