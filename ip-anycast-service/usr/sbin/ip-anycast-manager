@@ -5,6 +5,7 @@ set -euo pipefail
 CONFIG_FILE="/etc/ip-anycast/ip-anycast.conf"
 TEMPLATE_FILE="/etc/ip-anycast/bird.template"
 BIRD_CONF="/etc/bird/bird.conf"
+INTERFACE_TOUCHED=0
 
 warn() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [ip-anycast] WARNING: $1" >&2
@@ -107,6 +108,7 @@ validate_bird_config() {
 # 2. Network Setup Function
 setup_interface() {
     log "Setting up interface $INTERFACE_NAME..."
+    INTERFACE_TOUCHED=1
     
     # Remove existing interface to ensure a clean state
     if ip link show "$INTERFACE_NAME" > /dev/null 2>&1; then
@@ -243,12 +245,19 @@ check_health() {
 
 # Cleanup function to remove interface on service stop
 cleanup() {
+    local status="${1:-0}"
+    trap - EXIT SIGINT SIGTERM
+    if [ "$INTERFACE_TOUCHED" != "1" ]; then
+        exit "$status"
+    fi
+
     log "Stopping service. Removing interface $INTERFACE_NAME..."
     ip link set "$INTERFACE_NAME" down 2>/dev/null
     ip link del "$INTERFACE_NAME" 2>/dev/null
-    exit 0
+    exit "$status"
 }
-trap cleanup SIGINT SIGTERM
+trap 'cleanup $?' EXIT
+trap 'cleanup 0' SIGINT SIGTERM
 
 # Initialize
 # Validate BIRD config before touching the managed interface.
