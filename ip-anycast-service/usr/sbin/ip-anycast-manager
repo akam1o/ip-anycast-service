@@ -71,6 +71,14 @@ require_positive_integer() {
     fi
 }
 
+validate_bird_runtime_config() {
+    if [ "$BIRD_CONF" != "/etc/bird/bird.conf" ] && [ "$BIRD_SERVICE" = "bird" ]; then
+        echo "Error: BIRD_CONF is set to '$BIRD_CONF' but BIRD_SERVICE is still 'bird'." >&2
+        echo "Error: Configure a dedicated BIRD systemd service that starts with this config, then set BIRD_SERVICE to that service name." >&2
+        exit 1
+    fi
+}
+
 is_valid_asn() {
     local asn="$1"
     [[ "$asn" =~ ^[0-9]+$ ]] && [ "$asn" -ge 1 ] && [ "$asn" -le 4294967295 ]
@@ -101,6 +109,7 @@ require_var "NEIGHBORS"
 require_var "BFD_INTERVAL"
 require_var "BFD_IDLE_TX"
 require_var "BFD_MULTIPLIER"
+validate_bird_runtime_config
 
 escape_sed_replacement() {
     # Escape backslash, &, and the delimiter (|)

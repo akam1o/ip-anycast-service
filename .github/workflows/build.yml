@@ -35,6 +35,18 @@ jobs:
           sudo install -D -m 755 ip-anycast-service/usr/sbin/ip-anycast-manager /usr/sbin/ip-anycast-manager
           systemd-analyze verify ip-anycast-service/lib/systemd/system/ip-anycast.service
 
+      - name: Reject Unsafe Custom BIRD Config
+        run: |
+          sudo install -d -m 755 /etc/ip-anycast
+          sudo install -m 644 ip-anycast-service/etc/ip-anycast/ip-anycast.conf /etc/ip-anycast/ip-anycast.conf
+          sudo sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/tmp/bird-custom.conf"|' /etc/ip-anycast/ip-anycast.conf
+          if sudo /usr/sbin/ip-anycast-manager >/tmp/ip-anycast-manager.out 2>&1; then
+            cat /tmp/ip-anycast-manager.out
+            echo "Expected ip-anycast-manager to reject custom BIRD_CONF with default BIRD_SERVICE." >&2
+            exit 1
+          fi
+          grep -q "BIRD_CONF is set to '/tmp/bird-custom.conf' but BIRD_SERVICE is still 'bird'" /tmp/ip-anycast-manager.out
+
       - name: Validate BIRD Template
         run: |
           tmp_conf="$(mktemp)"
