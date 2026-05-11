@@ -152,6 +152,15 @@ jobs:
           mkdir -p dist_rpm
           cp ${RPMBUILD_TOP}/RPMS/noarch/*.rpm dist_rpm/
 
+          # Smoke test the installed RPM defaults against EPEL's BIRD layout.
+          dnf install -y epel-release
+          dnf install -y --allowerasing dist_rpm/*.rpm
+          grep -q '^BIRD_CONF="/etc/bird.conf"$' /etc/ip-anycast/ip-anycast.conf
+          sed '/^# --- Main Execution Logic ---/q' /usr/sbin/ip-anycast-manager > /tmp/ip-anycast-manager-functions
+          bash -c 'source /tmp/ip-anycast-manager-functions; generate_bird_config'
+          test -f /etc/bird.conf
+          bird -p -c /etc/bird.conf
+
       - name: Upload RPM Artifact
         uses: actions/upload-artifact@v4
         with:
