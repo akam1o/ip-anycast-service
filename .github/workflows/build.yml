@@ -112,13 +112,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Extract version information (assumes git command exists in container)
+      # Extract release version for tags; use a valid RPM version for PR smoke tests.
       - name: Set up Version
         id: version
         run: |
-          # Could try getting from env vars instead of git command for safety, but
-          # using simple string processing here
-          REF_VERSION=${GITHUB_REF#refs/tags/v}
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            REF_VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            REF_VERSION=0.0.0
+          fi
           echo "VERSION=${REF_VERSION}" >> $GITHUB_ENV
           echo "Building RPM for ${{ matrix.target }} - Version: ${REF_VERSION}"
 
