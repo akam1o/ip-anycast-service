@@ -67,20 +67,21 @@ jobs:
             exit 1
           fi
 
-      - name: Validate BIRD Template
+      - name: Validate Generated BIRD Config
         run: |
+          sed '/^# --- Main Execution Logic ---/q' ip-anycast-service/usr/sbin/ip-anycast-manager > /tmp/ip-anycast-manager-functions
+          sudo install -d -m 755 /etc/ip-anycast
+          sudo install -m 644 ip-anycast-service/etc/ip-anycast/ip-anycast.conf /etc/ip-anycast/ip-anycast.conf
+          sudo install -m 644 ip-anycast-service/etc/ip-anycast/bird.template /etc/ip-anycast/bird.template
           tmp_conf="$(mktemp)"
-          cp ip-anycast-service/etc/ip-anycast/bird.template "${tmp_conf}"
-          sed -i "s|__ROUTER_ID__|10.0.0.5|g" "${tmp_conf}"
-          sed -i "s|__ANYCAST_CIDR__|192.168.10.1/32|g" "${tmp_conf}"
-          sed -i "s|__INTERFACE_NAME__|anycast0|g" "${tmp_conf}"
-          sed -i "s|__LOCAL_AS__|65001|g" "${tmp_conf}"
-          sed -i "s|__SOURCE_IP__|10.0.0.5|g" "${tmp_conf}"
-          sed -i "s|__BFD_INTERVAL__|200 ms|g" "${tmp_conf}"
-          sed -i "s|__BFD_IDLE_TX__|2 s|g" "${tmp_conf}"
-          sed -i "s|__BFD_MULTIPLIER__|3|g" "${tmp_conf}"
-          sed -i "s|__NEIGHBOR_CONFIG__|protocol bgp upstream_0 from bgp_template { neighbor 10.0.0.1 as 64512; }|g" "${tmp_conf}"
+          BIRD_OUTPUT="${tmp_conf}" bash -c '
+            source /tmp/ip-anycast-manager-functions
+            BIRD_CONF="$BIRD_OUTPUT"
+            generate_bird_config
+          '
           bird -p -c "${tmp_conf}"
+          grep -q "protocol bgp upstream_0 from bgp_template { neighbor 10.0.0.1 as 64512; }" "${tmp_conf}"
+          grep -q "protocol bgp upstream_1 from bgp_template { neighbor 10.0.0.2 as 64512; }" "${tmp_conf}"
 
   # ------------------------------------------------------------------
   # Job 1: Build RPMs (Matrix Build for EL8 & EL9)
