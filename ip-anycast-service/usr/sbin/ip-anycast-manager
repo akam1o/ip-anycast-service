@@ -77,6 +77,11 @@ validate_bird_runtime_config() {
         echo "Error: Configure a dedicated BIRD systemd service that starts with this config, then set BIRD_SERVICE to that service name." >&2
         exit 1
     fi
+    if [ "$BIRD_SERVICE" != "bird" ] && [ -z "$BIRD_CONTROL_SOCKET" ]; then
+        echo "Error: BIRD_SERVICE is set to '$BIRD_SERVICE' but BIRD_CONTROL_SOCKET is empty." >&2
+        echo "Error: Set BIRD_CONTROL_SOCKET to the control socket for that BIRD service so birdc configures the intended daemon." >&2
+        exit 1
+    fi
 }
 
 is_valid_asn() {

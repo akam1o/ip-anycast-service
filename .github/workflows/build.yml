@@ -46,6 +46,14 @@ jobs:
             exit 1
           fi
           grep -q "BIRD_CONF is set to '/tmp/bird-custom.conf' but BIRD_SERVICE is still 'bird'" /tmp/ip-anycast-manager.out
+          sudo sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/etc/bird/bird.conf"|' /etc/ip-anycast/ip-anycast.conf
+          printf '\nBIRD_SERVICE="bird-custom"\n' | sudo tee -a /etc/ip-anycast/ip-anycast.conf >/dev/null
+          if sudo /usr/sbin/ip-anycast-manager >/tmp/ip-anycast-manager.out 2>&1; then
+            cat /tmp/ip-anycast-manager.out
+            echo "Expected ip-anycast-manager to reject custom BIRD_SERVICE without BIRD_CONTROL_SOCKET." >&2
+            exit 1
+          fi
+          grep -q "BIRD_SERVICE is set to 'bird-custom' but BIRD_CONTROL_SOCKET is empty" /tmp/ip-anycast-manager.out
 
       - name: Validate BIRD Template
         run: |

@@ -50,9 +50,9 @@ The main configuration file is located at `/etc/ip-anycast/ip-anycast.conf`.
 | `NEIGHBORS` | Space-separated list of upstream neighbors (`IP:AS`) | `10.0.0.1:64512 10.0.0.2:64512` |
 | `BIRD_CONF` | Path to the generated BIRD configuration file | `/etc/bird/bird.conf` |
 | `BIRD_SERVICE` | systemd service name used to start/reload BIRD | `bird` |
-| `BIRD_CONTROL_SOCKET` | Optional BIRD control socket for `birdc` | `/run/bird/bird.ctl` |
+| `BIRD_CONTROL_SOCKET` | Optional BIRD control socket for `birdc`; required when `BIRD_SERVICE` is not `bird` | `/run/bird/bird.ctl` |
 
-If `BIRD_CONF` is set to a non-default path, `BIRD_SERVICE` must point to a dedicated systemd unit that starts BIRD with that same config file.
+If `BIRD_CONF` is set to a non-default path, `BIRD_SERVICE` must point to a dedicated systemd unit that starts BIRD with that same config file. When `BIRD_SERVICE` is not `bird`, set `BIRD_CONTROL_SOCKET` to that daemon's control socket.
 
 ### Custom Health Check
 
