@@ -37,7 +37,7 @@ jobs:
           sudo install -d -m 755 /etc/ip-anycast
           sudo install -m 644 ip-anycast-service/etc/ip-anycast/ip-anycast.conf /etc/ip-anycast/ip-anycast.conf
           sudo sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/tmp/bird-custom.conf"|' /etc/ip-anycast/ip-anycast.conf
-          if sudo /usr/sbin/ip-anycast-manager >/tmp/ip-anycast-manager.out 2>&1; then
+          if sudo sh -c '/usr/sbin/ip-anycast-manager >/tmp/ip-anycast-manager.out 2>&1'; then
             cat /tmp/ip-anycast-manager.out
             echo "Expected ip-anycast-manager to reject custom BIRD_CONF with default BIRD_SERVICE." >&2
             exit 1
@@ -45,7 +45,7 @@ jobs:
           grep -q "BIRD_CONF is set to '/tmp/bird-custom.conf' but BIRD_SERVICE is still 'bird'" /tmp/ip-anycast-manager.out
           sudo sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/etc/bird/bird.conf"|' /etc/ip-anycast/ip-anycast.conf
           printf '\nBIRD_SERVICE="bird-custom"\n' | sudo tee -a /etc/ip-anycast/ip-anycast.conf >/dev/null
-          if sudo /usr/sbin/ip-anycast-manager >/tmp/ip-anycast-manager.out 2>&1; then
+          if sudo sh -c '/usr/sbin/ip-anycast-manager >/tmp/ip-anycast-manager.out 2>&1'; then
             cat /tmp/ip-anycast-manager.out
             echo "Expected ip-anycast-manager to reject custom BIRD_SERVICE without BIRD_CONTROL_SOCKET." >&2
             exit 1
@@ -118,7 +118,7 @@ jobs:
           else
             REF_VERSION=0.0.0
           fi
-          echo "VERSION=${REF_VERSION}" >> $GITHUB_ENV
+          echo "VERSION=${REF_VERSION}" >> "$GITHUB_ENV"
           echo "Building RPM for ${{ matrix.target }} - Version: ${REF_VERSION}"
 
       - name: Build RPM
@@ -129,27 +129,27 @@ jobs:
           rpmdev-setuptree
           
           # Prepare source code
-          mkdir -p build_tmp/${NAME}-${{ env.VERSION }}
-          cp -r ip-anycast-service/* build_tmp/${NAME}-${{ env.VERSION }}/
-          cp LICENSE build_tmp/${NAME}-${{ env.VERSION }}/
+          mkdir -p "build_tmp/${NAME}-${{ env.VERSION }}"
+          cp -r ip-anycast-service/* "build_tmp/${NAME}-${{ env.VERSION }}/"
+          cp LICENSE "build_tmp/${NAME}-${{ env.VERSION }}/"
           
           # Create source tarball
           # Resolve path safely as it depends on environment (user home /github/home or /root)
-          RPMBUILD_TOP=$(rpm --eval '%{_topdir}')
-          tar -czf ${RPMBUILD_TOP}/SOURCES/${NAME}-${{ env.VERSION}}.tar.gz -C build_tmp .
+          RPMBUILD_TOP="$(rpm --eval '%{_topdir}')"
+          tar -czf "${RPMBUILD_TOP}/SOURCES/${NAME}-${{ env.VERSION }}.tar.gz" -C build_tmp .
           
           # Place SPEC file
-          cp RPM/${NAME}.spec ${RPMBUILD_TOP}/SPECS/
+          cp "RPM/${NAME}.spec" "${RPMBUILD_TOP}/SPECS/"
           
           # Update version
-          sed -i "s/^Version:.*/Version:        ${{ env.VERSION }}/" ${RPMBUILD_TOP}/SPECS/${NAME}.spec
+          sed -i "s/^Version:.*/Version:        ${{ env.VERSION }}/" "${RPMBUILD_TOP}/SPECS/${NAME}.spec"
           
           # Execute build
-          rpmbuild -bb ${RPMBUILD_TOP}/SPECS/${NAME}.spec
+          rpmbuild -bb "${RPMBUILD_TOP}/SPECS/${NAME}.spec"
 
           # Copy RPMs to workspace for upload
           mkdir -p dist_rpm
-          cp ${RPMBUILD_TOP}/RPMS/noarch/*.rpm dist_rpm/
+          cp "${RPMBUILD_TOP}"/RPMS/noarch/*.rpm dist_rpm/
 
           # Smoke test the installed RPM defaults against EPEL's BIRD layout.
           dnf install -y epel-release
@@ -212,32 +212,32 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Build DEB
         run: |
           NAME="ip-anycast-service"
           BUILD_DIR="build_deb/${NAME}_${{ env.VERSION }}_all"
           
-          mkdir -p ${BUILD_DIR}/DEBIAN
-          cp -r ip-anycast-service/* ${BUILD_DIR}/
+          mkdir -p "${BUILD_DIR}/DEBIAN"
+          cp -r ip-anycast-service/* "${BUILD_DIR}/"
           
-          cp DEBIAN/control ${BUILD_DIR}/DEBIAN/
-          sed -i "s/^Version:.*/Version: ${{ env.VERSION }}/" ${BUILD_DIR}/DEBIAN/control
+          cp DEBIAN/control "${BUILD_DIR}/DEBIAN/"
+          sed -i "s/^Version:.*/Version: ${{ env.VERSION }}/" "${BUILD_DIR}/DEBIAN/control"
           
           if [ -f DEBIAN/postinst ]; then
-            cp DEBIAN/postinst ${BUILD_DIR}/DEBIAN/
-            chmod 755 ${BUILD_DIR}/DEBIAN/postinst
+            cp DEBIAN/postinst "${BUILD_DIR}/DEBIAN/"
+            chmod 755 "${BUILD_DIR}/DEBIAN/postinst"
           fi
           
           if [ -f DEBIAN/conffiles ]; then
-            cp DEBIAN/conffiles ${BUILD_DIR}/DEBIAN/
-            chmod 644 ${BUILD_DIR}/DEBIAN/conffiles
+            cp DEBIAN/conffiles "${BUILD_DIR}/DEBIAN/"
+            chmod 644 "${BUILD_DIR}/DEBIAN/conffiles"
           fi
           
-          chmod 755 ${BUILD_DIR}/usr/sbin/ip-anycast-manager
+          chmod 755 "${BUILD_DIR}/usr/sbin/ip-anycast-manager"
           
-          dpkg-deb --build ${BUILD_DIR}
+          dpkg-deb --build "${BUILD_DIR}"
           
           mkdir dist
           mv build_deb/*.deb dist/
@@ -263,14 +263,14 @@ jobs:
         with:
           # Downloads all artifacts if name is not specified
           path: ./dist
-          merge-multiple: true 
+          merge-multiple: true
           # ^ New feature in v4: Option to place files flat without separating folders
 
       - name: List files
         run: ls -R ./dist
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ./dist/*
         env:
