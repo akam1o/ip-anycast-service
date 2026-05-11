@@ -181,6 +181,11 @@ jobs:
           EOF
           chmod 755 /tmp/fakebin/systemctl /tmp/fakebin/birdc
           PATH="/tmp/fakebin:$PATH" bash -c 'source /tmp/ip-anycast-manager-functions; reload_bird'
+          sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/etc/bird/bird.conf"|' /etc/ip-anycast/ip-anycast.conf
+          printf '\nBIRD_SERVICE="bird-custom"\nBIRD_CONTROL_SOCKET="/run/bird-custom/bird.ctl"\n' >> /etc/ip-anycast/ip-anycast.conf
+          rpm -Uvh --replacepkgs dist_rpm/*.rpm
+          grep -q '^BIRD_CONF="/etc/bird/bird.conf"$' /etc/ip-anycast/ip-anycast.conf
+          grep -q '^BIRD_SERVICE="bird-custom"$' /etc/ip-anycast/ip-anycast.conf
 
       - name: Upload RPM Artifact
         if: startsWith(github.ref, 'refs/tags/v')
