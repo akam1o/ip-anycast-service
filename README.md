@@ -102,4 +102,4 @@ journalctl -u ip-anycast -f
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

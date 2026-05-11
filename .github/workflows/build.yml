@@ -132,6 +132,7 @@ jobs:
           # Prepare source code
           mkdir -p build_tmp/${NAME}-${{ env.VERSION }}
           cp -r ip-anycast-service/* build_tmp/${NAME}-${{ env.VERSION }}/
+          cp LICENSE build_tmp/${NAME}-${{ env.VERSION }}/
           
           # Create source tarball
           # Resolve path safely as it depends on environment (user home /github/home or /root)

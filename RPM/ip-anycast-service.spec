@@ -10,6 +10,7 @@ Source0:        %{name}-%{version}.tar.gz
 # ./etc/ip-anycast/bird.template
 # ./usr/sbin/ip-anycast-manager
 # ./lib/systemd/system/ip-anycast.service
+# ./LICENSE
 
 BuildArch:      noarch
 BuildRequires:  systemd-rpm-macros
@@ -46,6 +47,7 @@ install -m 644 lib/systemd/system/ip-anycast.service %{buildroot}%{_unitdir}/ip-
 
 %files
 # Configuration files are not overwritten on update; .rpmnew files are created instead
+%license LICENSE
 %config(noreplace) /etc/ip-anycast/ip-anycast.conf
 %dir /etc/ip-anycast
 /etc/ip-anycast/bird.template
