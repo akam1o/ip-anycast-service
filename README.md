@@ -66,6 +66,8 @@ The command should be an executable file path and return exit code `0` for healt
 ```bash
 HEALTHCHECK_TIMEOUT_SECONDS="2"
 HEALTHCHECK_INTERVAL_SECONDS="5"
+HEALTHCHECK_SUCCESS_THRESHOLD="2"
+HEALTHCHECK_FAILURE_THRESHOLD="2"
 ```
 
 ## Usage

@@ -84,8 +84,12 @@ is_valid_neighbor_address() {
 # Optional settings (can be overridden in config)
 HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-2}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-5}"
+HEALTHCHECK_SUCCESS_THRESHOLD="${HEALTHCHECK_SUCCESS_THRESHOLD:-2}"
+HEALTHCHECK_FAILURE_THRESHOLD="${HEALTHCHECK_FAILURE_THRESHOLD:-2}"
 require_positive_integer "HEALTHCHECK_TIMEOUT_SECONDS"
 require_positive_integer "HEALTHCHECK_INTERVAL_SECONDS"
+require_positive_integer "HEALTHCHECK_SUCCESS_THRESHOLD"
+require_positive_integer "HEALTHCHECK_FAILURE_THRESHOLD"
 
 require_var "APP_TYPE"
 require_var "ANYCAST_CIDR"
@@ -366,7 +370,10 @@ reload_bird
 # Wait briefly to ensure BIRD has applied config
 sleep 2
 
-log "Starting health check loop for APP_TYPE: $APP_TYPE"
+success_count=0
+failure_count=0
+
+log "Starting health check loop for APP_TYPE: $APP_TYPE (success threshold: $HEALTHCHECK_SUCCESS_THRESHOLD, failure threshold: $HEALTHCHECK_FAILURE_THRESHOLD)"
 
 # Loop
 while true; do
@@ -375,14 +382,20 @@ while true; do
     
     if check_health; then
         # Application is HEALTHY
-        if [ "$IS_UP" == "no" ]; then
-            log "Health check PASSED. Bringing UP $INTERFACE_NAME (Advertise)."
+        success_count=$((success_count + 1))
+        failure_count=0
+
+        if [ "$IS_UP" == "no" ] && [ "$success_count" -ge "$HEALTHCHECK_SUCCESS_THRESHOLD" ]; then
+            log "Health check PASSED $success_count consecutive times. Bringing UP $INTERFACE_NAME (Advertise)."
             ip link set "$INTERFACE_NAME" up
         fi
     else
         # Application is UNHEALTHY
-        if [ "$IS_UP" == "yes" ]; then
-            log "Health check FAILED. Bringing DOWN $INTERFACE_NAME (Withdraw)."
+        failure_count=$((failure_count + 1))
+        success_count=0
+
+        if [ "$IS_UP" == "yes" ] && [ "$failure_count" -ge "$HEALTHCHECK_FAILURE_THRESHOLD" ]; then
+            log "Health check FAILED $failure_count consecutive times. Bringing DOWN $INTERFACE_NAME (Withdraw)."
             ip link set "$INTERFACE_NAME" down
         fi
     fi
