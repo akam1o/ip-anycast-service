@@ -160,6 +160,21 @@ jobs:
           bash -c 'source /tmp/ip-anycast-manager-functions; generate_bird_config'
           test -f /etc/bird.conf
           bird -p -c /etc/bird.conf
+          mkdir -p /tmp/fakebin
+          cat > /tmp/fakebin/systemctl <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            is-active) exit 3 ;;
+            start) exit 0 ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          cat > /tmp/fakebin/birdc <<'EOF'
+          #!/bin/sh
+          exit 1
+          EOF
+          chmod 755 /tmp/fakebin/systemctl /tmp/fakebin/birdc
+          PATH="/tmp/fakebin:$PATH" bash -c 'source /tmp/ip-anycast-manager-functions; reload_bird'
 
       - name: Upload RPM Artifact
         uses: actions/upload-artifact@v4
