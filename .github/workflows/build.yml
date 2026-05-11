@@ -55,6 +55,18 @@ jobs:
           fi
           grep -q "BIRD_SERVICE is set to 'bird-custom' but BIRD_CONTROL_SOCKET is empty" /tmp/ip-anycast-manager.out
 
+      - name: Verify BIRD Reload Fallback Scope
+        run: |
+          sed '/^# --- Main Execution Logic ---/q' ip-anycast-service/usr/sbin/ip-anycast-manager > /tmp/ip-anycast-manager-functions
+          sudo install -d -m 755 /etc/ip-anycast
+          sudo install -m 644 ip-anycast-service/etc/ip-anycast/ip-anycast.conf /etc/ip-anycast/ip-anycast.conf
+          bash -c 'source /tmp/ip-anycast-manager-functions; can_reload_bird_service'
+          printf '\nBIRD_SERVICE="bird-custom"\nBIRD_CONTROL_SOCKET="/run/bird-custom/bird.ctl"\n' | sudo tee -a /etc/ip-anycast/ip-anycast.conf >/dev/null
+          if bash -c 'source /tmp/ip-anycast-manager-functions; can_reload_bird_service'; then
+            echo "Expected custom BIRD_SERVICE reload to require birdc -s success without systemctl fallback." >&2
+            exit 1
+          fi
+
       - name: Validate BIRD Template
         run: |
           tmp_conf="$(mktemp)"

@@ -157,7 +157,7 @@ run_birdc_configure() {
 }
 
 can_reload_bird_service() {
-    [ "$BIRD_CONF" = "/etc/bird/bird.conf" ] || [ "$BIRD_SERVICE" != "bird" ]
+    [ "$BIRD_SERVICE" = "bird" ] && [ "$BIRD_CONF" = "/etc/bird/bird.conf" ] && [ -z "$BIRD_CONTROL_SOCKET" ]
 }
 
 interface_exists() {
