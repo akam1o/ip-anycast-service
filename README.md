@@ -18,6 +18,7 @@ This service ensures that your Anycast IP address is only advertised to the netw
 ### RHEL / Rocky Linux (RPM)
 
 ```bash
+sudo dnf install -y epel-release  # Provides BIRD on RHEL/Rocky
 sudo dnf install ./ip-anycast-service-*.rpm
 ```
 

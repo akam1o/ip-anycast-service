@@ -72,7 +72,7 @@ require_positive_integer() {
 }
 
 validate_bird_runtime_config() {
-    if [ "$BIRD_CONF" != "/etc/bird/bird.conf" ] && [ "$BIRD_SERVICE" = "bird" ]; then
+    if ! is_default_bird_conf_path && [ "$BIRD_SERVICE" = "bird" ]; then
         echo "Error: BIRD_CONF is set to '$BIRD_CONF' but BIRD_SERVICE is still 'bird'." >&2
         echo "Error: Configure a dedicated BIRD systemd service that starts with this config, then set BIRD_SERVICE to that service name." >&2
         exit 1
@@ -82,6 +82,10 @@ validate_bird_runtime_config() {
         echo "Error: Set BIRD_CONTROL_SOCKET to the control socket for that BIRD service so birdc configures the intended daemon." >&2
         exit 1
     fi
+}
+
+is_default_bird_conf_path() {
+    [ "$BIRD_CONF" = "/etc/bird/bird.conf" ] || [ "$BIRD_CONF" = "/etc/bird.conf" ]
 }
 
 is_valid_asn() {
@@ -157,7 +161,7 @@ run_birdc_configure() {
 }
 
 can_reload_bird_service() {
-    [ "$BIRD_SERVICE" = "bird" ] && [ "$BIRD_CONF" = "/etc/bird/bird.conf" ] && [ -z "$BIRD_CONTROL_SOCKET" ]
+    [ "$BIRD_SERVICE" = "bird" ] && is_default_bird_conf_path && [ -z "$BIRD_CONTROL_SOCKET" ]
 }
 
 interface_exists() {

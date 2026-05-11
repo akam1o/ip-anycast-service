@@ -45,6 +45,9 @@ install -m 644 etc/ip-anycast/bird.template %{buildroot}/etc/ip-anycast/bird.tem
 install -m 755 usr/sbin/ip-anycast-manager %{buildroot}/usr/sbin/ip-anycast-manager
 install -m 644 lib/systemd/system/ip-anycast.service %{buildroot}%{_unitdir}/ip-anycast.service
 
+# EPEL's BIRD package uses /etc/bird.conf with the default bird.service.
+sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/etc/bird.conf"|' %{buildroot}/etc/ip-anycast/ip-anycast.conf
+
 %files
 # Configuration files are not overwritten on update; .rpmnew files are created instead
 %license LICENSE
