@@ -45,6 +45,8 @@ fi
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 BIRD_CONF="${BIRD_CONF:-/etc/bird/bird.conf}"
+BIRD_SERVICE="${BIRD_SERVICE:-bird}"
+BIRD_CONTROL_SOCKET="${BIRD_CONTROL_SOCKET:-}"
 
 # Logging helper
 log() {
@@ -101,6 +103,10 @@ escape_sed_replacement() {
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g'
 }
 
+escape_birdc_string() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
 validate_bird_config() {
     local config_path="$1"
 
@@ -115,6 +121,25 @@ validate_bird_config() {
 
     echo "Error: Generated BIRD config failed validation: $config_path" >&2
     return 1
+}
+
+run_birdc_configure() {
+    local escaped_conf
+    escaped_conf="$(escape_birdc_string "$BIRD_CONF")"
+
+    if ! command -v birdc >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if [ -n "$BIRD_CONTROL_SOCKET" ]; then
+        birdc -s "$BIRD_CONTROL_SOCKET" "configure \"$escaped_conf\"" >/dev/null 2>&1
+    else
+        birdc "configure \"$escaped_conf\"" >/dev/null 2>&1
+    fi
+}
+
+can_reload_bird_service() {
+    [ "$BIRD_CONF" = "/etc/bird/bird.conf" ] || [ "$BIRD_SERVICE" != "bird" ]
 }
 
 interface_exists() {
@@ -222,17 +247,20 @@ generate_bird_config() {
 reload_bird() {
     log "Applying BIRD configuration..."
 
-    if systemctl is-active --quiet bird; then
-        if command -v birdc >/dev/null 2>&1; then
-            if birdc configure >/dev/null 2>&1; then
-                log "BIRD reloaded via 'birdc configure'."
-                return 0
-            fi
-            warn "'birdc configure' failed; falling back to systemd reload."
-        fi
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "Error: systemctl not found; unable to manage BIRD service $BIRD_SERVICE." >&2
+        return 1
+    fi
 
-        if systemctl reload bird >/dev/null 2>&1; then
-            log "BIRD reloaded via 'systemctl reload bird'."
+    if systemctl is-active --quiet "$BIRD_SERVICE"; then
+        if run_birdc_configure; then
+            log "BIRD reloaded via 'birdc configure \"$BIRD_CONF\"'."
+            return 0
+        fi
+        warn "'birdc configure \"$BIRD_CONF\"' failed."
+
+        if can_reload_bird_service && systemctl reload "$BIRD_SERVICE" >/dev/null 2>&1; then
+            log "BIRD reloaded via 'systemctl reload $BIRD_SERVICE'."
             return 0
         fi
 
@@ -240,8 +268,19 @@ reload_bird() {
         return 1
     fi
 
-    log "BIRD is not active; starting bird."
-    systemctl start bird
+    log "BIRD service $BIRD_SERVICE is not active; starting it."
+    systemctl start "$BIRD_SERVICE"
+
+    if [ "$BIRD_CONF" != "/etc/bird/bird.conf" ] || [ -n "$BIRD_CONTROL_SOCKET" ]; then
+        if run_birdc_configure; then
+            log "BIRD applied custom config via 'birdc configure \"$BIRD_CONF\"'."
+            return 0
+        fi
+        warn "Started $BIRD_SERVICE but failed to apply custom BIRD config $BIRD_CONF."
+        return 1
+    fi
+
+    return 0
 }
 
 # 4. Health Check Function
