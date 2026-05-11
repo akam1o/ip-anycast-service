@@ -28,6 +28,7 @@ jobs:
         run: |
           bash -n ip-anycast-service/usr/sbin/ip-anycast-manager DEBIAN/postinst
           shellcheck ip-anycast-service/usr/sbin/ip-anycast-manager DEBIAN/postinst
+          env PATH="$(mktemp -d)" /bin/sh DEBIAN/postinst configure
 
       - name: Verify systemd Unit
         run: |
