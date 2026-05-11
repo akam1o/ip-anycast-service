@@ -1,15 +1,60 @@
 name: Build Packages
 
 on:
+  pull_request:
   push:
+    branches:
+      - main
+      - develop
     tags:
       - 'v*'
 
 jobs:
   # ------------------------------------------------------------------
+  # Job 0: Verify scripts and generated configuration
+  # ------------------------------------------------------------------
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Verification Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck bird2
+
+      - name: Lint Shell Scripts
+        run: |
+          bash -n ip-anycast-service/usr/sbin/ip-anycast-manager DEBIAN/postinst
+          shellcheck ip-anycast-service/usr/sbin/ip-anycast-manager DEBIAN/postinst
+
+      - name: Verify systemd Unit
+        run: |
+          sudo install -D -m 755 ip-anycast-service/usr/sbin/ip-anycast-manager /usr/sbin/ip-anycast-manager
+          systemd-analyze verify ip-anycast-service/lib/systemd/system/ip-anycast.service
+
+      - name: Validate BIRD Template
+        run: |
+          tmp_conf="$(mktemp)"
+          cp ip-anycast-service/etc/ip-anycast/bird.template "${tmp_conf}"
+          sed -i "s|__ROUTER_ID__|10.0.0.5|g" "${tmp_conf}"
+          sed -i "s|__ANYCAST_CIDR__|192.168.10.1/32|g" "${tmp_conf}"
+          sed -i "s|__INTERFACE_NAME__|anycast0|g" "${tmp_conf}"
+          sed -i "s|__LOCAL_AS__|65001|g" "${tmp_conf}"
+          sed -i "s|__SOURCE_IP__|10.0.0.5|g" "${tmp_conf}"
+          sed -i "s|__BFD_INTERVAL__|200 ms|g" "${tmp_conf}"
+          sed -i "s|__BFD_IDLE_TX__|2 s|g" "${tmp_conf}"
+          sed -i "s|__BFD_MULTIPLIER__|3|g" "${tmp_conf}"
+          sed -i "s|__NEIGHBOR_CONFIG__|protocol bgp upstream_0 from bgp_template { neighbor 10.0.0.1 as 64512; }|g" "${tmp_conf}"
+          bird -p -c "${tmp_conf}"
+
+  # ------------------------------------------------------------------
   # Job 1: Build RPMs (Matrix Build for EL8 & EL9)
   # ------------------------------------------------------------------
   build-rpm:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -85,6 +130,8 @@ jobs:
   # Job 2: Build DEB (Ubuntu)
   # ------------------------------------------------------------------
   build-deb:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -135,6 +182,7 @@ jobs:
   # ------------------------------------------------------------------
   create-release:
     needs: [build-rpm, build-deb]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
