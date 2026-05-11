@@ -293,7 +293,7 @@ reload_bird() {
     log "BIRD service $BIRD_SERVICE is not active; starting it."
     systemctl start "$BIRD_SERVICE"
 
-    if [ "$BIRD_CONF" != "/etc/bird/bird.conf" ] || [ -n "$BIRD_CONTROL_SOCKET" ]; then
+    if ! is_default_bird_conf_path || [ -n "$BIRD_CONTROL_SOCKET" ]; then
         if run_birdc_configure; then
             log "BIRD applied custom config via 'birdc configure \"$BIRD_CONF\"'."
             return 0
