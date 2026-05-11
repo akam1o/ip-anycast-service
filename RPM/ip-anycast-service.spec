@@ -58,6 +58,9 @@ sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/etc/bird.conf"|' %{buildroot}/etc/ip-anycast
 %{_unitdir}/ip-anycast.service
 
 %post
+if [ -f /etc/ip-anycast/ip-anycast.conf ] && grep -qx 'BIRD_CONF="/etc/bird/bird.conf"' /etc/ip-anycast/ip-anycast.conf; then
+    sed -i 's|^BIRD_CONF="/etc/bird/bird.conf"$|BIRD_CONF="/etc/bird.conf"|' /etc/ip-anycast/ip-anycast.conf
+fi
 %systemd_post ip-anycast.service
 
 %preun
