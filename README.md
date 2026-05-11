@@ -18,6 +18,7 @@ This service ensures that your Anycast IP address is only advertised to the netw
 ### RHEL / Rocky Linux (RPM)
 
 ```bash
+sudo dnf install -y epel-release  # Provides BIRD on RHEL/Rocky
 sudo dnf install ./ip-anycast-service-*.rpm
 ```
 
@@ -48,7 +49,11 @@ The main configuration file is located at `/etc/ip-anycast/ip-anycast.conf`.
 | `LOCAL_AS` | Local Autonomous System number | `65001` |
 | `SOURCE_IP` | Source IP for BGP sessions | `10.0.0.5` |
 | `NEIGHBORS` | Space-separated list of upstream neighbors (`IP:AS`) | `10.0.0.1:64512 10.0.0.2:64512` |
-| `BIRD_CONF` | Path to the generated BIRD configuration file | `/etc/bird/bird.conf` |
+| `BIRD_CONF` | Path to the generated BIRD configuration file | Debian/Ubuntu: `/etc/bird/bird.conf`; RHEL/Rocky: `/etc/bird.conf` |
+| `BIRD_SERVICE` | systemd service name used to start/reload BIRD | `bird` |
+| `BIRD_CONTROL_SOCKET` | Optional BIRD control socket for `birdc`; required when `BIRD_SERVICE` is not `bird` | `/run/bird/bird.ctl` |
+
+If `BIRD_CONF` is set to a non-default path, `BIRD_SERVICE` must point to a dedicated systemd unit that starts BIRD with that same config file. The default `bird` service supports `/etc/bird/bird.conf` on Debian/Ubuntu and `/etc/bird.conf` on RHEL/Rocky. When `BIRD_SERVICE` is not `bird`, set `BIRD_CONTROL_SOCKET` to that daemon's control socket.
 
 ### Custom Health Check
 
@@ -64,6 +69,8 @@ The command should be an executable file path and return exit code `0` for healt
 ```bash
 HEALTHCHECK_TIMEOUT_SECONDS="2"
 HEALTHCHECK_INTERVAL_SECONDS="5"
+HEALTHCHECK_SUCCESS_THRESHOLD="2"
+HEALTHCHECK_FAILURE_THRESHOLD="2"
 ```
 
 ## Usage
@@ -96,4 +103,4 @@ journalctl -u ip-anycast -f
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

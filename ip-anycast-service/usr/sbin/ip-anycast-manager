@@ -42,8 +42,11 @@ if [ $((group_write & 2)) -ne 0 ] || [ $((other_write & 2)) -ne 0 ]; then
     exit 1
 fi
 
+# shellcheck source=/dev/null
 source "$CONFIG_FILE"
 BIRD_CONF="${BIRD_CONF:-/etc/bird/bird.conf}"
+BIRD_SERVICE="${BIRD_SERVICE:-bird}"
+BIRD_CONTROL_SOCKET="${BIRD_CONTROL_SOCKET:-}"
 
 # Logging helper
 log() {
@@ -68,11 +71,42 @@ require_positive_integer() {
     fi
 }
 
+validate_bird_runtime_config() {
+    if ! is_default_bird_conf_path && [ "$BIRD_SERVICE" = "bird" ]; then
+        echo "Error: BIRD_CONF is set to '$BIRD_CONF' but BIRD_SERVICE is still 'bird'." >&2
+        echo "Error: Configure a dedicated BIRD systemd service that starts with this config, then set BIRD_SERVICE to that service name." >&2
+        exit 1
+    fi
+    if [ "$BIRD_SERVICE" != "bird" ] && [ -z "$BIRD_CONTROL_SOCKET" ]; then
+        echo "Error: BIRD_SERVICE is set to '$BIRD_SERVICE' but BIRD_CONTROL_SOCKET is empty." >&2
+        echo "Error: Set BIRD_CONTROL_SOCKET to the control socket for that BIRD service so birdc configures the intended daemon." >&2
+        exit 1
+    fi
+}
+
+is_default_bird_conf_path() {
+    [ "$BIRD_CONF" = "/etc/bird/bird.conf" ] || [ "$BIRD_CONF" = "/etc/bird.conf" ]
+}
+
+is_valid_asn() {
+    local asn="$1"
+    [[ "$asn" =~ ^[0-9]+$ ]] && [ "$asn" -ge 1 ] && [ "$asn" -le 4294967295 ]
+}
+
+is_valid_neighbor_address() {
+    local address="$1"
+    [[ "$address" =~ ^[0-9A-Fa-f:.]+$ ]]
+}
+
 # Optional settings (can be overridden in config)
 HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-2}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-5}"
+HEALTHCHECK_SUCCESS_THRESHOLD="${HEALTHCHECK_SUCCESS_THRESHOLD:-2}"
+HEALTHCHECK_FAILURE_THRESHOLD="${HEALTHCHECK_FAILURE_THRESHOLD:-2}"
 require_positive_integer "HEALTHCHECK_TIMEOUT_SECONDS"
 require_positive_integer "HEALTHCHECK_INTERVAL_SECONDS"
+require_positive_integer "HEALTHCHECK_SUCCESS_THRESHOLD"
+require_positive_integer "HEALTHCHECK_FAILURE_THRESHOLD"
 
 require_var "APP_TYPE"
 require_var "ANYCAST_CIDR"
@@ -84,10 +118,15 @@ require_var "NEIGHBORS"
 require_var "BFD_INTERVAL"
 require_var "BFD_IDLE_TX"
 require_var "BFD_MULTIPLIER"
+validate_bird_runtime_config
 
 escape_sed_replacement() {
     # Escape backslash, &, and the delimiter (|)
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g'
+}
+
+escape_birdc_string() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
 validate_bird_config() {
@@ -106,20 +145,61 @@ validate_bird_config() {
     return 1
 }
 
+run_birdc_configure() {
+    local escaped_conf
+    escaped_conf="$(escape_birdc_string "$BIRD_CONF")"
+
+    if ! command -v birdc >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if [ -n "$BIRD_CONTROL_SOCKET" ]; then
+        birdc -s "$BIRD_CONTROL_SOCKET" "configure \"$escaped_conf\"" >/dev/null 2>&1
+    else
+        birdc "configure \"$escaped_conf\"" >/dev/null 2>&1
+    fi
+}
+
+can_reload_bird_service() {
+    [ "$BIRD_SERVICE" = "bird" ] && is_default_bird_conf_path && [ -z "$BIRD_CONTROL_SOCKET" ]
+}
+
+interface_exists() {
+    ip link show dev "$INTERFACE_NAME" >/dev/null 2>&1
+}
+
+interface_is_dummy() {
+    ip -d -o link show dev "$INTERFACE_NAME" 2>/dev/null | grep -Eq '(^|[[:space:]])dummy([[:space:]]|$)'
+}
+
+interface_has_anycast_address() {
+    ip -o addr show dev "$INTERFACE_NAME" 2>/dev/null | awk '{print $4}' | grep -Fxq "$ANYCAST_CIDR"
+}
+
 # 2. Network Setup Function
 setup_interface() {
     log "Setting up interface $INTERFACE_NAME..."
-    INTERFACE_TOUCHED=1
-    
-    # Remove existing interface to ensure a clean state
-    if ip link show "$INTERFACE_NAME" > /dev/null 2>&1; then
+
+    if interface_exists; then
+        if ! interface_is_dummy; then
+            echo "Error: Interface $INTERFACE_NAME already exists and is not a dummy interface." >&2
+            return 1
+        fi
+        if ! interface_has_anycast_address; then
+            echo "Error: Interface $INTERFACE_NAME already exists but does not have $ANYCAST_CIDR; refusing to replace it." >&2
+            return 1
+        fi
+
+        log "Removing stale managed dummy interface $INTERFACE_NAME..."
+        ip link set "$INTERFACE_NAME" down
         ip link del "$INTERFACE_NAME"
     fi
-    
+
     # Create dummy interface and assign IP
     ip link add name "$INTERFACE_NAME" type dummy
+    INTERFACE_TOUCHED=1
     ip addr add "$ANYCAST_CIDR" dev "$INTERFACE_NAME"
-    
+
     # IMPORTANT: Initialize state as DOWN to prevent premature advertisement
     ip link set "$INTERFACE_NAME" down
 }
@@ -128,23 +208,35 @@ setup_interface() {
 generate_bird_config() {
     log "Generating $BIRD_CONF from template..."
     local tmp_conf="$BIRD_CONF.tmp"
-    
+    local neighbor_block=""
+    local count=0
+    local neighbor
+    local neigh_ip
+    local neigh_as
+
     # Dynamically build the neighbor configuration block
-    NEIGHBOR_BLOCK=""
-    count=0
+    # shellcheck disable=SC2086
     for neighbor in $NEIGHBORS; do
-        neigh_ip=$(echo "$neighbor" | cut -d: -f1)
-        neigh_as=$(echo "$neighbor" | cut -d: -f2)
-        
-        # Validate that IP and AS are not empty
-        if [[ -z "$neigh_ip" || -z "$neigh_as" ]]; then
-            log "Warning: Invalid neighbor format '$neighbor'. Skipping."
+        neigh_ip="${neighbor%:*}"
+        neigh_as="${neighbor##*:}"
+
+        if [[ "$neigh_ip" == "$neighbor" || -z "$neigh_ip" || -z "$neigh_as" ]]; then
+            warn "Invalid neighbor format '$neighbor'. Expected IP:AS. Skipping."
+            continue
+        fi
+        if ! is_valid_neighbor_address "$neigh_ip" || ! is_valid_asn "$neigh_as"; then
+            warn "Invalid neighbor value '$neighbor'. Expected an IP address and numeric AS number. Skipping."
             continue
         fi
 
-        NEIGHBOR_BLOCK+="protocol bgp upstream_$count from bgp_template { neighbor $neigh_ip as $neigh_as; }\n"
+        neighbor_block+="protocol bgp upstream_$count from bgp_template { neighbor $neigh_ip as $neigh_as; }\n"
         count=$((count+1))
     done
+
+    if [ "$count" -eq 0 ]; then
+        echo "Error: NEIGHBORS must contain at least one valid IP:AS entry in $CONFIG_FILE." >&2
+        return 1
+    fi
 
     # Create a temporary config file
     cp "$TEMPLATE_FILE" "$tmp_conf"
@@ -163,7 +255,7 @@ generate_bird_config() {
     
     # Insert Neighbor block (remove placeholder and append block)
     sed -i "s|__NEIGHBOR_CONFIG__||g" "$tmp_conf"
-    printf '%b' "$NEIGHBOR_BLOCK" >> "$tmp_conf"
+    printf '%b' "$neighbor_block" >> "$tmp_conf"
 
     if ! validate_bird_config "$tmp_conf"; then
         rm -f "$tmp_conf"
@@ -177,17 +269,20 @@ generate_bird_config() {
 reload_bird() {
     log "Applying BIRD configuration..."
 
-    if systemctl is-active --quiet bird; then
-        if command -v birdc >/dev/null 2>&1; then
-            if birdc configure >/dev/null 2>&1; then
-                log "BIRD reloaded via 'birdc configure'."
-                return 0
-            fi
-            warn "'birdc configure' failed; falling back to systemd reload."
-        fi
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "Error: systemctl not found; unable to manage BIRD service $BIRD_SERVICE." >&2
+        return 1
+    fi
 
-        if systemctl reload bird >/dev/null 2>&1; then
-            log "BIRD reloaded via 'systemctl reload bird'."
+    if systemctl is-active --quiet "$BIRD_SERVICE"; then
+        if run_birdc_configure; then
+            log "BIRD reloaded via 'birdc configure \"$BIRD_CONF\"'."
+            return 0
+        fi
+        warn "'birdc configure \"$BIRD_CONF\"' failed."
+
+        if can_reload_bird_service && systemctl reload "$BIRD_SERVICE" >/dev/null 2>&1; then
+            log "BIRD reloaded via 'systemctl reload $BIRD_SERVICE'."
             return 0
         fi
 
@@ -195,12 +290,25 @@ reload_bird() {
         return 1
     fi
 
-    log "BIRD is not active; starting bird."
-    systemctl start bird
+    log "BIRD service $BIRD_SERVICE is not active; starting it."
+    systemctl start "$BIRD_SERVICE"
+
+    if ! is_default_bird_conf_path || [ -n "$BIRD_CONTROL_SOCKET" ]; then
+        if run_birdc_configure; then
+            log "BIRD applied custom config via 'birdc configure \"$BIRD_CONF\"'."
+            return 0
+        fi
+        warn "Started $BIRD_SERVICE but failed to apply custom BIRD config $BIRD_CONF."
+        return 1
+    fi
+
+    return 0
 }
 
 # 4. Health Check Function
 check_health() {
+    local tracking
+
     case "$APP_TYPE" in
         "http")
             # Check HTTP connection to localhost
@@ -211,13 +319,24 @@ check_health() {
             curl -k -s -f --connect-timeout "$HEALTHCHECK_TIMEOUT_SECONDS" --max-time "$HEALTHCHECK_TIMEOUT_SECONDS" -o /dev/null https://127.0.0.1 || return 1
             ;;
         "ntp")
-            # Check if chrony is synchronized and offset is acceptable (< 100ms)
-            chronyc tracking > /dev/null 2>&1 && \
-            chronyc -c tracking | awk -F, '{if ($5 < 0.1 && $5 > -0.1) exit 0; else exit 1}' || return 1
+            # Require chrony synchronization and an absolute offset below 100ms.
+            if command -v timeout >/dev/null 2>&1; then
+                tracking="$(timeout "$HEALTHCHECK_TIMEOUT_SECONDS" chronyc -c tracking 2>/dev/null)" || return 1
+            else
+                tracking="$(chronyc -c tracking 2>/dev/null)" || return 1
+            fi
+            printf '%s\n' "$tracking" | awk -F, '
+                {
+                    leap = $NF
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", leap)
+                    if (($2 + 0) > 0 && leap == "Normal" && ($5 + 0) < 0.1 && ($5 + 0) > -0.1) exit 0
+                    exit 1
+                }
+            ' || return 1
             ;;
         "dns")
-            # Check if DNS responds to a query for root
-            dig +short "+time=${HEALTHCHECK_TIMEOUT_SECONDS}" +tries=1 @127.0.0.1 . > /dev/null 2>&1 || return 1
+            # Require a successful root NS answer, not just any DNS response.
+            dig "+time=${HEALTHCHECK_TIMEOUT_SECONDS}" +tries=1 +noall +answer @127.0.0.1 . NS 2>/dev/null | awk 'NF { found = 1 } END { exit found ? 0 : 1 }' || return 1
             ;;
         "ldap")
             # Check TCP connection to LDAP port 389
@@ -229,7 +348,11 @@ check_health() {
                     log "Error: CUSTOM_CHECK_CMD is not executable: $CUSTOM_CHECK_CMD"
                     return 1
                 fi
-                "$CUSTOM_CHECK_CMD" || return 1
+                if command -v timeout >/dev/null 2>&1; then
+                    timeout "$HEALTHCHECK_TIMEOUT_SECONDS" "$CUSTOM_CHECK_CMD" || return 1
+                else
+                    "$CUSTOM_CHECK_CMD" || return 1
+                fi
             else
                 log "Error: Custom check selected but CUSTOM_CHECK_CMD is empty."
                 return 1
@@ -269,7 +392,10 @@ reload_bird
 # Wait briefly to ensure BIRD has applied config
 sleep 2
 
-log "Starting health check loop for APP_TYPE: $APP_TYPE"
+success_count=0
+failure_count=0
+
+log "Starting health check loop for APP_TYPE: $APP_TYPE (success threshold: $HEALTHCHECK_SUCCESS_THRESHOLD, failure threshold: $HEALTHCHECK_FAILURE_THRESHOLD)"
 
 # Loop
 while true; do
@@ -278,14 +404,20 @@ while true; do
     
     if check_health; then
         # Application is HEALTHY
-        if [ "$IS_UP" == "no" ]; then
-            log "Health check PASSED. Bringing UP $INTERFACE_NAME (Advertise)."
+        success_count=$((success_count + 1))
+        failure_count=0
+
+        if [ "$IS_UP" == "no" ] && [ "$success_count" -ge "$HEALTHCHECK_SUCCESS_THRESHOLD" ]; then
+            log "Health check PASSED $success_count consecutive times. Bringing UP $INTERFACE_NAME (Advertise)."
             ip link set "$INTERFACE_NAME" up
         fi
     else
         # Application is UNHEALTHY
-        if [ "$IS_UP" == "yes" ]; then
-            log "Health check FAILED. Bringing DOWN $INTERFACE_NAME (Withdraw)."
+        failure_count=$((failure_count + 1))
+        success_count=0
+
+        if [ "$IS_UP" == "yes" ] && [ "$failure_count" -ge "$HEALTHCHECK_FAILURE_THRESHOLD" ]; then
+            log "Health check FAILED $failure_count consecutive times. Bringing DOWN $INTERFACE_NAME (Withdraw)."
             ip link set "$INTERFACE_NAME" down
         fi
     fi

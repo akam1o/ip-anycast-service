@@ -1,15 +1,91 @@
 name: Build Packages
 
 on:
+  pull_request:
   push:
     tags:
       - 'v*'
 
 jobs:
   # ------------------------------------------------------------------
+  # Job 0: Verify scripts and generated configuration
+  # ------------------------------------------------------------------
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Verification Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck bird2
+
+      - name: Lint Shell Scripts
+        run: |
+          bash -n ip-anycast-service/usr/sbin/ip-anycast-manager DEBIAN/postinst
+          shellcheck ip-anycast-service/usr/sbin/ip-anycast-manager DEBIAN/postinst
+          env PATH="$(mktemp -d)" /bin/sh DEBIAN/postinst configure
+
+      - name: Verify systemd Unit
+        run: |
+          sudo install -D -m 755 ip-anycast-service/usr/sbin/ip-anycast-manager /usr/sbin/ip-anycast-manager
+          systemd-analyze verify ip-anycast-service/lib/systemd/system/ip-anycast.service
+
+      - name: Reject Unsafe Custom BIRD Config
+        run: |
+          sudo install -d -m 755 /etc/ip-anycast
+          sudo install -m 644 ip-anycast-service/etc/ip-anycast/ip-anycast.conf /etc/ip-anycast/ip-anycast.conf
+          sudo sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/tmp/bird-custom.conf"|' /etc/ip-anycast/ip-anycast.conf
+          if sudo sh -c '/usr/sbin/ip-anycast-manager >/tmp/ip-anycast-manager.out 2>&1'; then
+            cat /tmp/ip-anycast-manager.out
+            echo "Expected ip-anycast-manager to reject custom BIRD_CONF with default BIRD_SERVICE." >&2
+            exit 1
+          fi
+          grep -q "BIRD_CONF is set to '/tmp/bird-custom.conf' but BIRD_SERVICE is still 'bird'" /tmp/ip-anycast-manager.out
+          sudo sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/etc/bird/bird.conf"|' /etc/ip-anycast/ip-anycast.conf
+          printf '\nBIRD_SERVICE="bird-custom"\n' | sudo tee -a /etc/ip-anycast/ip-anycast.conf >/dev/null
+          if sudo sh -c '/usr/sbin/ip-anycast-manager >/tmp/ip-anycast-manager.out 2>&1'; then
+            cat /tmp/ip-anycast-manager.out
+            echo "Expected ip-anycast-manager to reject custom BIRD_SERVICE without BIRD_CONTROL_SOCKET." >&2
+            exit 1
+          fi
+          grep -q "BIRD_SERVICE is set to 'bird-custom' but BIRD_CONTROL_SOCKET is empty" /tmp/ip-anycast-manager.out
+
+      - name: Verify BIRD Reload Fallback Scope
+        run: |
+          sed '/^# --- Main Execution Logic ---/q' ip-anycast-service/usr/sbin/ip-anycast-manager > /tmp/ip-anycast-manager-functions
+          sudo install -d -m 755 /etc/ip-anycast
+          sudo install -m 644 ip-anycast-service/etc/ip-anycast/ip-anycast.conf /etc/ip-anycast/ip-anycast.conf
+          bash -c 'source /tmp/ip-anycast-manager-functions; can_reload_bird_service'
+          printf '\nBIRD_SERVICE="bird-custom"\nBIRD_CONTROL_SOCKET="/run/bird-custom/bird.ctl"\n' | sudo tee -a /etc/ip-anycast/ip-anycast.conf >/dev/null
+          if bash -c 'source /tmp/ip-anycast-manager-functions; can_reload_bird_service'; then
+            echo "Expected custom BIRD_SERVICE reload to require birdc -s success without systemctl fallback." >&2
+            exit 1
+          fi
+
+      - name: Validate Generated BIRD Config
+        run: |
+          sed '/^# --- Main Execution Logic ---/q' ip-anycast-service/usr/sbin/ip-anycast-manager > /tmp/ip-anycast-manager-functions
+          sudo install -d -m 755 /etc/ip-anycast
+          sudo install -m 644 ip-anycast-service/etc/ip-anycast/ip-anycast.conf /etc/ip-anycast/ip-anycast.conf
+          sudo install -m 644 ip-anycast-service/etc/ip-anycast/bird.template /etc/ip-anycast/bird.template
+          tmp_conf="$(mktemp)"
+          BIRD_OUTPUT="${tmp_conf}" bash -c '
+            source /tmp/ip-anycast-manager-functions
+            BIRD_CONF="$BIRD_OUTPUT"
+            generate_bird_config
+          '
+          bird -p -c "${tmp_conf}"
+          grep -q "protocol bgp upstream_0 from bgp_template { neighbor 10.0.0.1 as 64512; }" "${tmp_conf}"
+          grep -q "protocol bgp upstream_1 from bgp_template { neighbor 10.0.0.2 as 64512; }" "${tmp_conf}"
+
+  # ------------------------------------------------------------------
   # Job 1: Build RPMs (Matrix Build for EL8 & EL9)
   # ------------------------------------------------------------------
   build-rpm:
+    needs: verify
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -33,14 +109,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Extract version information (assumes git command exists in container)
+      # Extract release version for tags; use a valid RPM version for PR smoke tests.
       - name: Set up Version
         id: version
         run: |
-          # Could try getting from env vars instead of git command for safety, but
-          # using simple string processing here
-          REF_VERSION=${GITHUB_REF#refs/tags/v}
-          echo "VERSION=${REF_VERSION}" >> $GITHUB_ENV
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            REF_VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            REF_VERSION=0.0.0
+          fi
+          echo "VERSION=${REF_VERSION}" >> "$GITHUB_ENV"
           echo "Building RPM for ${{ matrix.target }} - Version: ${REF_VERSION}"
 
       - name: Build RPM
@@ -51,28 +129,66 @@ jobs:
           rpmdev-setuptree
           
           # Prepare source code
-          mkdir -p build_tmp/${NAME}-${{ env.VERSION }}
-          cp -r ip-anycast-service/* build_tmp/${NAME}-${{ env.VERSION }}/
+          mkdir -p "build_tmp/${NAME}-${{ env.VERSION }}"
+          cp -r ip-anycast-service/* "build_tmp/${NAME}-${{ env.VERSION }}/"
+          cp LICENSE "build_tmp/${NAME}-${{ env.VERSION }}/"
           
           # Create source tarball
           # Resolve path safely as it depends on environment (user home /github/home or /root)
-          RPMBUILD_TOP=$(rpm --eval '%{_topdir}')
-          tar -czf ${RPMBUILD_TOP}/SOURCES/${NAME}-${{ env.VERSION}}.tar.gz -C build_tmp .
+          RPMBUILD_TOP="$(rpm --eval '%{_topdir}')"
+          tar -czf "${RPMBUILD_TOP}/SOURCES/${NAME}-${{ env.VERSION }}.tar.gz" -C build_tmp .
           
           # Place SPEC file
-          cp RPM/${NAME}.spec ${RPMBUILD_TOP}/SPECS/
+          cp "RPM/${NAME}.spec" "${RPMBUILD_TOP}/SPECS/"
           
           # Update version
-          sed -i "s/^Version:.*/Version:        ${{ env.VERSION }}/" ${RPMBUILD_TOP}/SPECS/${NAME}.spec
+          sed -i "s/^Version:.*/Version:        ${{ env.VERSION }}/" "${RPMBUILD_TOP}/SPECS/${NAME}.spec"
           
           # Execute build
-          rpmbuild -bb ${RPMBUILD_TOP}/SPECS/${NAME}.spec
+          rpmbuild -bb "${RPMBUILD_TOP}/SPECS/${NAME}.spec"
 
           # Copy RPMs to workspace for upload
           mkdir -p dist_rpm
-          cp ${RPMBUILD_TOP}/RPMS/noarch/*.rpm dist_rpm/
+          cp "${RPMBUILD_TOP}"/RPMS/noarch/*.rpm dist_rpm/
+
+          # Smoke test the installed RPM defaults against EPEL's BIRD layout.
+          dnf install -y epel-release
+          dnf install -y --allowerasing dist_rpm/*.rpm
+          grep -q '^BIRD_CONF="/etc/bird.conf"$' /etc/ip-anycast/ip-anycast.conf
+          sed '/^# --- Main Execution Logic ---/q' /usr/sbin/ip-anycast-manager > /tmp/ip-anycast-manager-functions
+          bash -c 'source /tmp/ip-anycast-manager-functions; generate_bird_config'
+          test -f /etc/bird.conf
+          bird -p -c /etc/bird.conf
+          sed -i 's|^ANYCAST_CIDR=.*|ANYCAST_CIDR="198.51.100.1/32"|' /etc/ip-anycast/ip-anycast.conf
+          sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/etc/bird/bird.conf"|' /etc/ip-anycast/ip-anycast.conf
+          rpm -Uvh --replacepkgs dist_rpm/*.rpm
+          grep -q '^ANYCAST_CIDR="198.51.100.1/32"$' /etc/ip-anycast/ip-anycast.conf
+          grep -q '^BIRD_CONF="/etc/bird.conf"$' /etc/ip-anycast/ip-anycast.conf
+          bash -c 'source /tmp/ip-anycast-manager-functions; generate_bird_config'
+          bird -p -c /etc/bird.conf
+          mkdir -p /tmp/fakebin
+          cat > /tmp/fakebin/systemctl <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            is-active) exit 3 ;;
+            start) exit 0 ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          cat > /tmp/fakebin/birdc <<'EOF'
+          #!/bin/sh
+          exit 1
+          EOF
+          chmod 755 /tmp/fakebin/systemctl /tmp/fakebin/birdc
+          PATH="/tmp/fakebin:$PATH" bash -c 'source /tmp/ip-anycast-manager-functions; reload_bird'
+          sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/etc/bird/bird.conf"|' /etc/ip-anycast/ip-anycast.conf
+          printf '\nBIRD_SERVICE="bird-custom"\nBIRD_CONTROL_SOCKET="/run/bird-custom/bird.ctl"\n' >> /etc/ip-anycast/ip-anycast.conf
+          rpm -Uvh --replacepkgs dist_rpm/*.rpm
+          grep -q '^BIRD_CONF="/etc/bird/bird.conf"$' /etc/ip-anycast/ip-anycast.conf
+          grep -q '^BIRD_SERVICE="bird-custom"$' /etc/ip-anycast/ip-anycast.conf
 
       - name: Upload RPM Artifact
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           # Upload artifacts with separate names (to avoid mixing)
@@ -85,6 +201,8 @@ jobs:
   # Job 2: Build DEB (Ubuntu)
   # ------------------------------------------------------------------
   build-deb:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -94,32 +212,32 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Build DEB
         run: |
           NAME="ip-anycast-service"
           BUILD_DIR="build_deb/${NAME}_${{ env.VERSION }}_all"
           
-          mkdir -p ${BUILD_DIR}/DEBIAN
-          cp -r ip-anycast-service/* ${BUILD_DIR}/
+          mkdir -p "${BUILD_DIR}/DEBIAN"
+          cp -r ip-anycast-service/* "${BUILD_DIR}/"
           
-          cp DEBIAN/control ${BUILD_DIR}/DEBIAN/
-          sed -i "s/^Version:.*/Version: ${{ env.VERSION }}/" ${BUILD_DIR}/DEBIAN/control
+          cp DEBIAN/control "${BUILD_DIR}/DEBIAN/"
+          sed -i "s/^Version:.*/Version: ${{ env.VERSION }}/" "${BUILD_DIR}/DEBIAN/control"
           
           if [ -f DEBIAN/postinst ]; then
-            cp DEBIAN/postinst ${BUILD_DIR}/DEBIAN/
-            chmod 755 ${BUILD_DIR}/DEBIAN/postinst
+            cp DEBIAN/postinst "${BUILD_DIR}/DEBIAN/"
+            chmod 755 "${BUILD_DIR}/DEBIAN/postinst"
           fi
           
           if [ -f DEBIAN/conffiles ]; then
-            cp DEBIAN/conffiles ${BUILD_DIR}/DEBIAN/
-            chmod 644 ${BUILD_DIR}/DEBIAN/conffiles
+            cp DEBIAN/conffiles "${BUILD_DIR}/DEBIAN/"
+            chmod 644 "${BUILD_DIR}/DEBIAN/conffiles"
           fi
           
-          chmod 755 ${BUILD_DIR}/usr/sbin/ip-anycast-manager
+          chmod 755 "${BUILD_DIR}/usr/sbin/ip-anycast-manager"
           
-          dpkg-deb --build ${BUILD_DIR}
+          dpkg-deb --build "${BUILD_DIR}"
           
           mkdir dist
           mv build_deb/*.deb dist/
@@ -135,6 +253,7 @@ jobs:
   # ------------------------------------------------------------------
   create-release:
     needs: [build-rpm, build-deb]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -144,14 +263,14 @@ jobs:
         with:
           # Downloads all artifacts if name is not specified
           path: ./dist
-          merge-multiple: true 
+          merge-multiple: true
           # ^ New feature in v4: Option to place files flat without separating folders
 
       - name: List files
         run: ls -R ./dist
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ./dist/*
         env:
