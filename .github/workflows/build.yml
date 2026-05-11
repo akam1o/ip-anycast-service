@@ -3,9 +3,6 @@ name: Build Packages
 on:
   pull_request:
   push:
-    branches:
-      - main
-      - develop
     tags:
       - 'v*'
 
