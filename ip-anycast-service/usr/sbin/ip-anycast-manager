@@ -99,6 +99,14 @@ is_valid_neighbor_address() {
 }
 
 # Optional settings (can be overridden in config)
+BGP_SESSION_MODE="${BGP_SESSION_MODE:-multihop}"
+case "$BGP_SESSION_MODE" in
+    singlehop|multihop) ;;
+    *)
+        echo "Error: BGP_SESSION_MODE must be singlehop or multihop in $CONFIG_FILE." >&2
+        exit 1
+        ;;
+esac
 HEALTHCHECK_TIMEOUT_SECONDS="${HEALTHCHECK_TIMEOUT_SECONDS:-2}"
 HEALTHCHECK_INTERVAL_SECONDS="${HEALTHCHECK_INTERVAL_SECONDS:-5}"
 HEALTHCHECK_SUCCESS_THRESHOLD="${HEALTHCHECK_SUCCESS_THRESHOLD:-2}"
@@ -213,6 +221,18 @@ generate_bird_config() {
     local neighbor
     local neigh_ip
     local neigh_as
+    local bgp_session_directive="multihop"
+    local bfd_session_scope="multihop"
+
+    if [ "$BGP_SESSION_MODE" = "singlehop" ]; then
+        if ! grep -q '__BGP_SESSION_DIRECTIVE__' "$TEMPLATE_FILE" ||
+           ! grep -q '__BFD_SESSION_SCOPE__' "$TEMPLATE_FILE"; then
+            echo "Error: singlehop requires __BGP_SESSION_DIRECTIVE__ and __BFD_SESSION_SCOPE__ in $TEMPLATE_FILE; update the BIRD template." >&2
+            return 1
+        fi
+        bgp_session_directive="direct"
+        bfd_session_scope='interface "*"'
+    fi
 
     # Dynamically build the neighbor configuration block
     # shellcheck disable=SC2086
@@ -248,6 +268,10 @@ generate_bird_config() {
     sed -i "s|__LOCAL_AS__|$(escape_sed_replacement "$LOCAL_AS")|g"             "$tmp_conf"
     sed -i "s|__SOURCE_IP__|$(escape_sed_replacement "$SOURCE_IP")|g"           "$tmp_conf"
     
+    # Keep BGP and BFD hop modes aligned.
+    sed -i "s|__BGP_SESSION_DIRECTIVE__|$(escape_sed_replacement "$bgp_session_directive")|g" "$tmp_conf"
+    sed -i "s|__BFD_SESSION_SCOPE__|$(escape_sed_replacement "$bfd_session_scope")|g" "$tmp_conf"
+
     # Replace BFD placeholders
     sed -i "s|__BFD_INTERVAL__|$(escape_sed_replacement "$BFD_INTERVAL")|g"     "$tmp_conf"
     sed -i "s|__BFD_IDLE_TX__|$(escape_sed_replacement "$BFD_IDLE_TX")|g"       "$tmp_conf"

@@ -19,13 +19,16 @@ jobs:
       - name: Install Verification Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends shellcheck bird2
+          sudo apt-get install -y --no-install-recommends shellcheck bird2 python3
 
       - name: Lint Shell Scripts
         run: |
           bash -n ip-anycast-service/usr/sbin/ip-anycast-manager DEBIAN/postinst
           shellcheck ip-anycast-service/usr/sbin/ip-anycast-manager DEBIAN/postinst
           env PATH="$(mktemp -d)" /bin/sh DEBIAN/postinst configure
+
+      - name: Test BGP and BFD Session Modes
+        run: sudo python3 -m unittest discover -s tests -v
 
       - name: Verify systemd Unit
         run: |
