@@ -55,6 +55,34 @@ The main configuration file is located at `/etc/ip-anycast/ip-anycast.conf`.
 
 If `BIRD_CONF` is set to a non-default path, `BIRD_SERVICE` must point to a dedicated systemd unit that starts BIRD with that same config file. The default `bird` service supports `/etc/bird/bird.conf` on Debian/Ubuntu and `/etc/bird.conf` on RHEL/Rocky. When `BIRD_SERVICE` is not `bird`, set `BIRD_CONTROL_SOCKET` to that daemon's control socket.
 
+### Single-hop and Multihop BGP/BFD
+
+Set `BGP_SESSION_MODE` to select the hop mode for all entries in `NEIGHBORS`:
+
+| Value | BGP | BFD |
+| --- | --- | --- |
+| `multihop` (default) | `multihop;` | `multihop { ... }` |
+| `singlehop` | `direct;` | `interface "*" { ... }` |
+
+For directly connected peers, use:
+
+```sh
+BGP_SESSION_MODE="singlehop"
+BFD_INTERVAL="200 ms"
+BFD_MULTIPLIER="3"
+```
+
+Configure the peers for the same BFD hop mode and compatible timers. The existing
+`BFD_INTERVAL`, `BFD_IDLE_TX`, and `BFD_MULTIPLIER` settings apply to either mode.
+Leaving `BGP_SESSION_MODE` unset preserves the previous multihop behavior. Other
+values are rejected before the service changes the interface or BIRD configuration.
+A manager instance uses one hop mode for all its neighbors; mixed modes are not supported.
+
+If you maintain a custom `bird.template`, replace the BGP `multihop` keyword with
+`__BGP_SESSION_DIRECTIVE__` and the BFD `multihop` block selector with
+`__BFD_SESSION_SCOPE__`. Single-hop mode rejects templates missing either placeholder.
+Legacy templates remain usable with the default multihop mode.
+
 ### Custom Health Check
 
 If `APP_TYPE` is set to `custom`, define your check command:

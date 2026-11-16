@@ -39,7 +39,7 @@ protocol kernel {
 }
 
 protocol bfd bfd_basic {
-    multihop {
+    __BFD_SESSION_SCOPE__ {
         interval __BFD_INTERVAL__;
         idle tx interval __BFD_IDLE_TX__;
         multiplier __BFD_MULTIPLIER__;
@@ -50,7 +50,7 @@ protocol bfd bfd_basic {
 
 template bgp bgp_template {
     local as __LOCAL_AS__;
-    multihop;
+    __BGP_SESSION_DIRECTIVE__;
     graceful restart;
     bfd;
     
