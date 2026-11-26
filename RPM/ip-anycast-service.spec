@@ -1,13 +1,14 @@
 Name:           ip-anycast-service
 Version:        1.0.0
 Release:        1%{?dist}
-Summary:        BIRD Anycast Manager based on health checks
+Summary:        BIRD/FRR Anycast Manager based on health checks
 License:        MIT
 URL:            https://ark-networks.net/ip-anycast-service
 Source0:        %{name}-%{version}.tar.gz
 # Assumes the source code (tar.gz) contains files in the following structure
 # ./etc/ip-anycast/ip-anycast.conf
 # ./etc/ip-anycast/bird.template
+# ./etc/ip-anycast/frr.template
 # ./usr/sbin/ip-anycast-manager
 # ./lib/systemd/system/ip-anycast.service
 # ./LICENSE
@@ -16,8 +17,8 @@ BuildArch:      noarch
 BuildRequires:  systemd-rpm-macros
 
 # Dependencies for RHEL/CentOS
-# Assumes bird is installed from EPEL repository or similar
-Requires:       bird
+# BIRD comes from EPEL; FRR comes from the base repositories.
+Requires:       (bird or frr)
 Requires:       bash
 Requires:       iproute
 Requires:       nmap-ncat
@@ -27,8 +28,8 @@ Requires:       curl
 Requires:       systemd
 
 %description
-Manages IP Anycast interface (dummy) and generates BIRD configuration
-dynamically based on application health checks.
+Manages IP Anycast interface (dummy) and generates BIRD or FRR
+configuration dynamically based on application health checks.
 
 %prep
 %setup -q
@@ -42,6 +43,7 @@ mkdir -p %{buildroot}%{_unitdir}
 # Install files (copy contents of tar.gz to buildroot)
 install -m 644 etc/ip-anycast/ip-anycast.conf %{buildroot}/etc/ip-anycast/ip-anycast.conf
 install -m 644 etc/ip-anycast/bird.template %{buildroot}/etc/ip-anycast/bird.template
+install -m 644 etc/ip-anycast/frr.template %{buildroot}/etc/ip-anycast/frr.template
 install -m 755 usr/sbin/ip-anycast-manager %{buildroot}/usr/sbin/ip-anycast-manager
 install -m 644 lib/systemd/system/ip-anycast.service %{buildroot}%{_unitdir}/ip-anycast.service
 
@@ -54,6 +56,7 @@ sed -i 's|^BIRD_CONF=.*|BIRD_CONF="/etc/bird.conf"|' %{buildroot}/etc/ip-anycast
 %config(noreplace) /etc/ip-anycast/ip-anycast.conf
 %dir /etc/ip-anycast
 /etc/ip-anycast/bird.template
+/etc/ip-anycast/frr.template
 /usr/sbin/ip-anycast-manager
 %{_unitdir}/ip-anycast.service
 

@@ -1,15 +1,16 @@
 # ip-anycast-service
 
-A lightweight service manager that controls an IP Anycast interface and dynamically updates BIRD BGP configuration based on application health checks.
+A lightweight service manager that controls an IP Anycast interface and dynamically updates BIRD or FRRouting (FRR) BGP configuration based on application health checks.
 
 ## Overview
 
-This service ensures that your Anycast IP address is only advertised to the network when the underlying application service is healthy. It manages a dummy network interface and generates BIRD configuration files to announce or withdraw routes.
+This service ensures that your Anycast IP address is only advertised to the network when the underlying application service is healthy. It manages a dummy network interface and generates BIRD or FRR configuration files to announce or withdraw routes.
 
 ## Features
 
 - **Health Monitoring**: Built-in health checks for common services (HTTP, HTTPS, NTP, DNS, LDAP) and support for custom check commands.
-- **Dynamic BGP Announcement**: Automatically reconfigures BIRD to advertise the Anycast IP when healthy and withdraw it when unhealthy.
+- **Dynamic BGP Announcement**: Automatically reconfigures BIRD or FRR to advertise the Anycast IP when healthy and withdraw it when unhealthy.
+- **Selectable Routing Daemon**: Choose BIRD (default) or FRR with `ROUTING_DAEMON`.
 - **Interface Management**: Automatically creates and manages a dummy interface for the Anycast IP.
 - **BFD Support**: Configurable BFD (Bidirectional Forwarding Detection) settings for fast failure detection.
 
@@ -18,15 +19,22 @@ This service ensures that your Anycast IP address is only advertised to the netw
 ### RHEL / Rocky Linux (RPM)
 
 ```bash
+# BIRD
 sudo dnf install -y epel-release  # Provides BIRD on RHEL/Rocky
-sudo dnf install ./ip-anycast-service-*.rpm
+sudo dnf install bird ./ip-anycast-service-*.rpm
+
+# FRR (from the base repositories)
+sudo dnf install frr ./ip-anycast-service-*.rpm
 ```
 
 ### Debian / Ubuntu (DEB)
 
 ```bash
-sudo dpkg -i ./ip-anycast-service_*.deb
-sudo apt-get install -f  # Install missing dependencies
+# BIRD
+sudo apt-get install ./ip-anycast-service_*.deb
+
+# FRR
+sudo apt-get install frr ./ip-anycast-service_*.deb
 ```
 
 ## Configuration
@@ -41,6 +49,15 @@ The main configuration file is located at `/etc/ip-anycast/ip-anycast.conf`.
 | `ANYCAST_CIDR` | The Anycast IP address with CIDR prefix | `192.168.10.1/32` |
 | `INTERFACE_NAME` | Name of the dummy interface to create | `anycast0` |
 
+### Routing Daemon
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `ROUTING_DAEMON` | Routing daemon to configure (`bird` or `frr`). Defaults to `bird` when unset. | `frr` |
+
+The BGP, BFD, and `BGP_SESSION_MODE` settings below apply to both daemons unless noted.
+When switching daemons, stop and disable the one you no longer use so that only one daemon speaks BGP.
+
 ### BGP Settings
 
 | Parameter | Description | Example |
@@ -53,7 +70,40 @@ The main configuration file is located at `/etc/ip-anycast/ip-anycast.conf`.
 | `BIRD_SERVICE` | systemd service name used to start/reload BIRD | `bird` |
 | `BIRD_CONTROL_SOCKET` | Optional BIRD control socket for `birdc`; required when `BIRD_SERVICE` is not `bird` | `/run/bird/bird.ctl` |
 
+The `BIRD_*` settings are used only with `ROUTING_DAEMON="bird"`.
 If `BIRD_CONF` is set to a non-default path, `BIRD_SERVICE` must point to a dedicated systemd unit that starts BIRD with that same config file. The default `bird` service supports `/etc/bird/bird.conf` on Debian/Ubuntu and `/etc/bird.conf` on RHEL/Rocky. When `BIRD_SERVICE` is not `bird`, set `BIRD_CONTROL_SOCKET` to that daemon's control socket.
+
+### FRR Settings
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `FRR_CONF` | Path to the generated FRR integrated configuration file | `/etc/frr/frr.conf` |
+| `FRR_SERVICE` | systemd service name used to start/reload FRR | `frr` |
+
+With `ROUTING_DAEMON="frr"`, the manager renders `/etc/ip-anycast/frr.template`, validates it with
+`vtysh --dryrun`, replaces the whole `FRR_CONF`, and applies it with `systemctl reload` (which runs
+`frr-reload.py`) or starts the service. Keep any other FRR configuration in the template.
+The Anycast prefix is announced with a BGP `network` statement, so it is withdrawn when the
+service brings the dummy interface down.
+
+Before starting the service with the default `frr` unit:
+
+- Enable `bgpd=yes` and `bfdd=yes` in `/etc/frr/daemons`, then restart `frr`.
+- Use the integrated config. On RHEL/Rocky 8, replace `no service integrated-vtysh-config` with
+  `service integrated-vtysh-config` in `/etc/frr/vtysh.conf`.
+
+The manager checks both and exits before touching the interface if either is missing.
+If `FRR_CONF` is not `/etc/frr/frr.conf`, `FRR_SERVICE` must point to a dedicated unit that loads that file.
+
+Differences from BIRD:
+
+- `BFD_INTERVAL` must convert to whole milliseconds (for example `200 ms` or `1 s`); it sets both the
+  receive and transmit intervals.
+- `BFD_IDLE_TX` is ignored because FRR has no idle TX interval.
+- `BGP_SESSION_MODE="singlehop"` requires eBGP neighbors, because FRR always treats iBGP sessions and
+  their BFD as multihop. iBGP neighbors in single-hop mode are rejected.
+
+Tested with FRR 7.5 (RHEL/Rocky 8), 8.5 (RHEL/Rocky 9), 8.1 (Ubuntu 22.04), and 8.4 (Ubuntu 24.04).
 
 ### Single-hop and Multihop BGP/BFD
 
@@ -63,6 +113,8 @@ Set `BGP_SESSION_MODE` to select the hop mode for all entries in `NEIGHBORS`:
 | --- | --- | --- |
 | `multihop` (default) | `multihop;` | `multihop { ... }` |
 | `singlehop` | `direct;` | `interface "*" { ... }` |
+
+With FRR, `multihop` adds `neighbor UPSTREAM ebgp-multihop 255` and BFD follows the BGP hop mode.
 
 For directly connected peers, use:
 
@@ -123,7 +175,7 @@ journalctl -u ip-anycast -f
 
 ## Dependencies
 
-- `bird` (BIRD Internet Routing Daemon)
+- `bird` (BIRD Internet Routing Daemon) or `frr` (FRRouting)
 - `bash`
 - `iproute2`
 - `systemd`

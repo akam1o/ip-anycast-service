@@ -1,0 +1,48 @@
+log syslog informational
+!
+! --- Filters ---
+!
+! Only export the specific Anycast CIDR
+ip prefix-list ANYCAST_EXPORT seq 10 permit __ANYCAST_CIDR__
+!
+route-map ANYCAST_EXPORT permit 10
+ match ip address prefix-list ANYCAST_EXPORT
+!
+route-map BGP_IMPORT deny 10
+!
+! --- BGP ---
+!
+router bgp __LOCAL_AS__
+ bgp router-id __ROUTER_ID__
+ no bgp default ipv4-unicast
+ ! Withdraw the network when the service brings the dummy interface down.
+ bgp network import-check
+ bgp graceful-restart
+ neighbor UPSTREAM peer-group
+ neighbor UPSTREAM update-source __SOURCE_IP__
+ neighbor UPSTREAM bfd
+ neighbor UPSTREAM bfd profile ip-anycast
+__BGP_SESSION_DIRECTIVE__
+ ! --- Neighbors (Dynamically Inserted) ---
+__NEIGHBOR_CONFIG__
+ !
+ address-family ipv4 unicast
+  network __ANYCAST_CIDR__
+  neighbor UPSTREAM activate
+  neighbor UPSTREAM next-hop-self
+  neighbor UPSTREAM addpath-tx-all-paths
+  neighbor UPSTREAM route-map BGP_IMPORT in
+  neighbor UPSTREAM route-map ANYCAST_EXPORT out
+ exit-address-family
+!
+! --- BFD ---
+!
+! Keep this block last; FRR 7.5 frr-reload.py does not leave the profile
+! sub-context before the next top-level block.
+bfd
+ profile ip-anycast
+  receive-interval __BFD_INTERVAL_MS__
+  transmit-interval __BFD_INTERVAL_MS__
+  detect-multiplier __BFD_MULTIPLIER__
+ !
+!

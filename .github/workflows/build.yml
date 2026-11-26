@@ -19,7 +19,7 @@ jobs:
       - name: Install Verification Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends shellcheck bird2 python3
+          sudo apt-get install -y --no-install-recommends shellcheck bird2 frr python3
 
       - name: Lint Shell Scripts
         run: |
@@ -27,7 +27,7 @@ jobs:
           shellcheck ip-anycast-service/usr/sbin/ip-anycast-manager DEBIAN/postinst
           env PATH="$(mktemp -d)" /bin/sh DEBIAN/postinst configure
 
-      - name: Test BGP and BFD Session Modes
+      - name: Test BIRD and FRR Config Generation
         run: sudo python3 -m unittest discover -s tests -v
 
       - name: Verify systemd Unit
@@ -156,7 +156,7 @@ jobs:
 
           # Smoke test the installed RPM defaults against EPEL's BIRD layout.
           dnf install -y epel-release
-          dnf install -y --allowerasing dist_rpm/*.rpm
+          dnf install -y --allowerasing bird dist_rpm/*.rpm
           grep -q '^BIRD_CONF="/etc/bird.conf"$' /etc/ip-anycast/ip-anycast.conf
           sed '/^# --- Main Execution Logic ---/q' /usr/sbin/ip-anycast-manager > /tmp/ip-anycast-manager-functions
           bash -c 'source /tmp/ip-anycast-manager-functions; generate_bird_config'
@@ -189,6 +189,15 @@ jobs:
           rpm -Uvh --replacepkgs dist_rpm/*.rpm
           grep -q '^BIRD_CONF="/etc/bird/bird.conf"$' /etc/ip-anycast/ip-anycast.conf
           grep -q '^BIRD_SERVICE="bird-custom"$' /etc/ip-anycast/ip-anycast.conf
+
+          # Validate the FRR template against the distribution's FRR.
+          dnf install -y frr
+          test -f /etc/ip-anycast/frr.template
+          printf '\nROUTING_DAEMON="frr"\n' >> /etc/ip-anycast/ip-anycast.conf
+          sed '/^# --- Main Execution Logic ---/q' /usr/sbin/ip-anycast-manager > /tmp/ip-anycast-manager-functions
+          bash -c 'source /tmp/ip-anycast-manager-functions; generate_frr_config'
+          vtysh --dryrun --inputfile /etc/frr/frr.conf
+          grep -q '^ neighbor 10.0.0.1 remote-as 64512$' /etc/frr/frr.conf
 
       - name: Upload RPM Artifact
         if: startsWith(github.ref, 'refs/tags/v')
